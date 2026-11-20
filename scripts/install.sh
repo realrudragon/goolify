@@ -238,6 +238,7 @@ for _ in $(seq 1 60); do
 done
 
 # Install convenient global 'goolify' CLI wrapper
+chmod +x "${GOOLIFY_DIR}/scripts/dev" "${GOOLIFY_DIR}/scripts/install.sh" 2>/dev/null || true
 cat >/usr/local/bin/goolify <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -245,10 +246,14 @@ cd "${GOOLIFY_DIR}"
 case "\${1:-status}" in
   upgrade)
     shift || true
-    git pull --ff-only && docker compose -f compose.yml up -d --build "\$@"
+    git pull --ff-only && chmod +x ./scripts/dev ./scripts/install.sh 2>/dev/null || true
+    docker compose -f compose.yml up -d --build "\$@"
+    ;;
+  creds | info)
+    grep -E '^(APP_URL|ROOT_USER_EMAIL|ROOT_USER_PASSWORD)=' "${ENV_FILE}" || true
     ;;
   *)
-    exec ./scripts/dev "\$@"
+    exec bash ./scripts/dev "\$@"
     ;;
 esac
 EOF
