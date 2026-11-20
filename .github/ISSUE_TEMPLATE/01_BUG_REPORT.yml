@@ -1,0 +1,80 @@
+name: 🐞 Bug Report
+description: "File a new Goolify bug report."
+title: "[Bug]: "
+labels: ["🔍 Triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!IMPORTANT]
+        > This tracker is for **Goolify** only. Goolify is an independent project based on [Coolify](https://github.com/coollabsio/coolify) and is not maintained by the Coolify team.
+        > If your problem happens on upstream Coolify, please report it to the [Coolify repository](https://github.com/coollabsio/coolify/issues) instead.
+        >
+        > Please make sure you are using the latest Goolify version, and report security issues privately via the **Security** tab.
+
+  - type: textarea
+    attributes:
+      label: Description and Error Message
+      description: Provide a detailed description of the error, along with any relevant log output (`docker compose logs controlplane worker`).
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Expected Behavior
+      description: Describe what you expected to happen instead.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Steps to Reproduce
+      description: Provide a step-by-step guide to reproduce the issue.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Example Repository URL
+      description: If applicable, provide a URL to a repository demonstrating the issue.
+
+  - type: input
+    attributes:
+      label: Goolify Version / Commit
+      description: The Goolify release tag or commit SHA you are running.
+      placeholder: "v0.1.0 or a1b2c3d"
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Did you migrate data from an existing Coolify v4 instance?
+      options:
+        - "No (fresh Goolify install)"
+        - "Yes (migrated from Coolify v4)"
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Operating System and Docker Version
+      description: Run `cat /etc/os-release` and `docker version`.
+      placeholder: "Ubuntu 24.04, Docker 27.x"
+
+  - type: textarea
+    attributes:
+      label: Screenshots / Visuals
+      description: If possible, provide screenshots or recordings.
+
+  - type: textarea
+    attributes:
+      label: Additional Information
+      description: Any other relevant details about the issue.

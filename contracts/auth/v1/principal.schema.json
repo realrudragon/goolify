@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coolify.local/contracts/auth/v1/principal.schema.json",
+  "title": "Principal",
+  "type": "object",
+  "required": ["user_id", "session_team_id", "is_instance_admin", "token_abilities", "team_roles", "resource_grants"],
+  "properties": {
+    "user_id": { "type": "integer", "minimum": 0 },
+    "email": { "type": "string" },
+    "session_team_id": { "type": "integer", "minimum": 0 },
+    "is_instance_admin": { "type": "boolean" },
+    "auth_method": { "type": "string", "enum": ["session", "bearer", "mcp"] },
+    "token_abilities": { "type": "array", "items": { "type": "string" } },
+    "team_roles": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "enum": ["member", "admin", "owner"] }
+    },
+    "resource_grants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["resource_type", "resource_id", "team_id", "level"],
+        "properties": {
+          "resource_type": { "type": "string" },
+          "resource_id": { "type": "integer", "minimum": 0 },
+          "team_id": { "type": "integer", "minimum": 0 },
+          "level": { "type": "string", "enum": ["read", "write"] }
+        }
+      }
+    }
+  }
+}

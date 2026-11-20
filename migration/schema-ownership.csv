@@ -1,0 +1,5 @@
+schema_layer,migration_owner,tool,backward_compatibility_rule,notes
+existing_coolify_v4_tables,go-migrate-cli,golang-migrate-or-sql-expand-only,preserve_all_columns_and_id_0_sentinels,Keep all Laravel schema columns intact during rollback window
+go_outbox_events,go-migrate-cli,sql-additive-table,additive_only_ignored_by_laravel,Transactional outbox table for Go dispatcher
+go_job_operations,go-migrate-cli,sql-additive-table,additive_only_ignored_by_laravel,Durable operation_id/attempt_id/epoch fencing state
+go_sessions,go-migrate-cli,sql-additive-table,additive_only_ignored_by_laravel,Native Go HTTP session store decoupled from Laravel sessions

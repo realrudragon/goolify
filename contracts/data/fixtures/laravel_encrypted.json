@@ -1,0 +1,21 @@
+{
+  "schema_version": "v1",
+  "synthetic_app_key": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "samples": [
+    {
+      "name": "private_key_multiline",
+      "serialize_php": true,
+      "plaintext": "-----BEGIN OPENSSH PRIVATE KEY-----\nSYNTHETIC-TEST-KEY-LINE-1\n  leading-and-trailing-spaces  \n-----END OPENSSH PRIVATE KEY-----\n"
+    },
+    {
+      "name": "env_empty_string",
+      "serialize_php": false,
+      "plaintext": ""
+    },
+    {
+      "name": "env_whitespace_preserved",
+      "serialize_php": false,
+      "plaintext": "  value with spaces \t\nline2  "
+    }
+  ]
+}

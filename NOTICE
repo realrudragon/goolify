@@ -1,0 +1,69 @@
+Goolify
+Copyright 2026 Worachote Pansanit
+
+This software is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+================================================================================
+UPSTREAM ATTRIBUTION — COOLIFY
+================================================================================
+
+Goolify is a standalone Go 1.26, Rust, and Astro + Vue 3.5 re-architecture
+derived from and wire/schema-compatible with Coolify:
+
+  Original Project: Coolify (https://github.com/coollabsio/coolify)
+  Original Author:  Andras Bacsai (@andrasbacsai) and the CoolLabs community
+  Original Copyright: Copyright 2025 Andras Bacsai
+  License:          Apache License, Version 2.0
+
+--------------------------------------------------------------------------------
+PRESERVED UPSTREAM ASSETS & COMPATIBILITY SPECIFICATIONS
+--------------------------------------------------------------------------------
+
+The following upstream Coolify assets and compatibility contracts are preserved:
+- One-click Docker Compose service catalog & YAML templates (templates/)
+- Service icons and brand assets copied into the standalone shell (svgs/)
+- Compose parser golden reference fixtures (tests/Fixtures/parser/)
+- PostgreSQL v4 relational data model and id = 0 instance sentinel semantics
+- Bidirectional Laravel APP_KEY AES-256-CBC + HMAC-SHA256 secret encryption
+  and Sanctum-compatible Bearer token / MCP contract
+- Product UI design tokens and security threat model (DESIGN.md, SECURITY.md)
+
+--------------------------------------------------------------------------------
+GOOLIFY RE-ARCHITECTURE (Worachote Pansanit, 2026)
+--------------------------------------------------------------------------------
+
+Substantial modifications and standalone native implementations authored for
+Goolify include:
+- backend/   — Go 1.26 control plane, durable PostgreSQL job worker,
+               bidirectional data/preflight migrator, and coolify-cli runtime
+- executor/  — Rust workspace (coolify-executor) providing NDJSON streaming
+               SSH/local execution, live PTY resize/stdin/cancel, whole-lifecycle
+               timeouts, and host-boundary enforcement
+- apps/web/  — Astro + Vue 3.5 + TypeScript + Tailwind CSS v4 frontend shell
+- compose.yml, coolify.ps1, scripts/dev, docker/stack-migration/Dockerfile
+  — Zero-PHP, zero-Node production container packaging and one-command launcher
+
+--------------------------------------------------------------------------------
+TRADEMARK NOTICE (Apache License 2.0, Section 6)
+--------------------------------------------------------------------------------
+
+"Coolify" and "CoolLabs" are trademarks or names associated with CoolLabs /
+Andras Bacsai. References to Coolify in this repository describe upstream
+origin, protocol/database compatibility, and attribution in accordance with
+Section 6 of the Apache License, Version 2.0. Goolify is an independent project
+maintained by Worachote Pansanit and is not affiliated with, endorsed by, or
+officially supported by CoolLabs.
+
+Out of respect for these trademarks, the Coolify logos were removed from the
+Goolify web UI. The Goolify logo (apps/web/public/goolify-logo.svg and the
+derived favicon/app icons) is an original work by Worachote Pansanit. Service
+icons in svgs/ belong to their respective projects and are used only to
+identify those services.
+
+--------------------------------------------------------------------------------
+SUPPORT THE ORIGINAL PROJECT
+--------------------------------------------------------------------------------
+
+If Goolify is useful to you, please also star and sponsor Coolify:
+  https://github.com/coollabsio/coolify
+  https://coolify.io/sponsorships

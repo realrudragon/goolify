@@ -1,0 +1,50 @@
+---
+import '../styles/tokens.css';
+import LogoutButton from '../features/auth/LogoutButton.vue';
+
+interface Props {
+  title?: string;
+}
+const { title = 'Goolify' } = Astro.props;
+---
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/goolify-logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+  </head>
+  <body>
+    <div style="display:grid;grid-template-columns:220px 1fr;min-height:100vh;">
+      <aside style="background:var(--ui-sidebar, #120e1a);border-right:1px solid var(--ui-chrome-border);padding:14px;display:flex;flex-direction:column;justify-content:space-between;">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;font-weight:700;margin-bottom:16px;font-size:15px;">
+            <img src="/goolify-logo.svg" alt="" width="22" height="22" />
+            <span>Goolify</span>
+          </div>
+          <nav aria-label="Primary navigation" style="display:grid;gap:6px;">
+            <a href="/" class="coolify-nav-link">Dashboard</a>
+            <a href="/projects" class="coolify-nav-link">Projects</a>
+            <a href="/servers" class="coolify-nav-link">Servers</a>
+            <a href="/teams" class="coolify-nav-link">Teams</a>
+            <a href="/settings" class="coolify-nav-link">Settings</a>
+          </nav>
+        </div>
+        <div style="display:grid;gap:10px;">
+          <LogoutButton client:load />
+          <p data-testid="upstream-attribution" style="margin:0;font-size:11px;line-height:1.4;opacity:0.7;">
+            Based on <a href="https://github.com/coollabsio/coolify" target="_blank" rel="noopener noreferrer">Coolify</a>
+            by Andras Bacsai and the CoolLabs community.
+          </p>
+        </div>
+      </aside>
+      <main style="padding:18px;max-width:1280px;width:100%;box-sizing:border-box;">
+        <slot />
+      </main>
+    </div>
+  </body>
+</html>

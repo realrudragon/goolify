@@ -1,0 +1,26 @@
+---
+import '../styles/tokens.css';
+import LoginPanel from '../features/auth/LoginPanel.vue';
+---
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login | Goolify</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/goolify-logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+  </head>
+  <body>
+    <main>
+      <LoginPanel client:load />
+      <p data-testid="upstream-attribution" style="text-align:center;font-size:12px;opacity:0.7;">
+        Goolify is an independent project based on
+        <a href="https://github.com/coollabsio/coolify" target="_blank" rel="noopener noreferrer">Coolify</a>
+        (Apache License 2.0).
+      </p>
+    </main>
+  </body>
+</html>

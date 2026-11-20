@@ -1,0 +1,28 @@
+{
+  "broken_fk_count": 0,
+  "cutover_preflight": true,
+  "dry_run": true,
+  "duration_ms": 1812,
+  "encrypted_secrets_checked": 1,
+  "encrypted_secrets_failed": 0,
+  "keyed_digests": {
+    "applications": "942a5e92b4d2277b30ddc6459576432a542ff0f7e3a1554170bb7fae3995aa59",
+    "environment_variables": "942a5e92b4d2277b30ddc6459576432a542ff0f7e3a1554170bb7fae3995aa59",
+    "environments": "942a5e92b4d2277b30ddc6459576432a542ff0f7e3a1554170bb7fae3995aa59",
+    "github_apps": "81cda4f9fc443298a43a7229dc2187d56acaae947bef0f6b528caada8a5a4c41",
+    "instance_settings": "995fcf749636771350c0b15629b3cab5bbf360d16cf58019061d64119be11848",
+    "private_keys": "0409fcad3550534582e2a7a95c7f4956afd64b4b0a2fa9e08d4f5fa7f3076e2e",
+    "projects": "942a5e92b4d2277b30ddc6459576432a542ff0f7e3a1554170bb7fae3995aa59",
+    "servers": "e358deb7aeef101f2ac6ea89a3ba0f875f98d4e92d3b5bb77560cb5929d9ec0b",
+    "services": "942a5e92b4d2277b30ddc6459576432a542ff0f7e3a1554170bb7fae3995aa59",
+    "standalone_dockers": "d1078e80e2d6d1fc40a75bd62af15fe02f98e921d6a802a70a50e2a2d9d27478",
+    "standalone_postgresqls": "a5307e44d208396eced9fed7267a492df3757a6c9d45ca7d99bc452e09a93386",
+    "teams": "9687b9b0b54060fefb88dc3c28fd75284c6c6bba4620ac653334a3fc73f096ee",
+    "users": "f792f3581ff273b60cec43ea6a284a2b5b23c7d57932807f9cbfe4896f463cec"
+  },
+  "preserved_remote_journals": 0,
+  "rollback_compatible": true,
+  "sentinel_zero_tables": 8,
+  "total_rows": 8,
+  "validated_at": "2026-11-19T18:21:35.9079935Z"
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coolify.local/contracts/execution/v1/request.schema.json",
+  "title": "ExecutionRequest",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "job_id",
+    "operation_id",
+    "attempt_id",
+    "ownership_epoch",
+    "resource_uuid",
+    "team_id",
+    "deadline_ms",
+    "expected_capability",
+    "operation"
+  ],
+  "properties": {
+    "protocol_version": { "type": "string", "const": "v1" },
+    "frame_type": { "type": "string", "enum": ["start", "stdin", "resize", "cancel"] },
+    "job_id": { "type": "string" },
+    "operation_id": { "type": "string" },
+    "attempt_id": { "type": "string" },
+    "ownership_epoch": { "type": "integer", "minimum": 1 },
+    "resource_uuid": { "type": "string" },
+    "team_id": { "type": "integer", "minimum": 0 },
+    "deadline_ms": { "type": "integer", "minimum": 1 },
+    "max_frame_bytes": { "type": "integer", "minimum": 1024, "maximum": 1048576 },
+    "expected_capability": { "type": "string", "enum": ["ssh_exec", "ssh_pty", "local_exec"] },
+    "operation": {
+      "type": "object",
+      "required": ["kind", "host", "port", "user", "command"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["exec", "pty", "journal_probe", "reconcile"] },
+        "host": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "type": "string" },
+        "private_key_fd": { "type": "integer" },
+        "use_sudo": { "type": "boolean" },
+        "command": { "type": "string" },
+        "pty_cols": { "type": "integer", "minimum": 1 },
+        "pty_rows": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

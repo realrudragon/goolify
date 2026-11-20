@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-coolify}
+      POSTGRES_USER: ${DB_USERNAME:-coolify}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-coolify-dev-secret}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-coolify} -d ${DB_DATABASE:-coolify}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  controlplane:
+    build:
+      context: .
+      dockerfile: docker/stack-migration/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgres://${DB_USERNAME:-coolify}:${DB_PASSWORD:-coolify-dev-secret}@postgres:5432/${DB_DATABASE:-coolify}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PREFIX: ${REDIS_PREFIX:-coolify:go:v1:}
+      APP_KEY: ${APP_KEY:-base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      APP_URL: ${APP_URL:-http://localhost:8000}
+      ROOT_USER_EMAIL: ${ROOT_USER_EMAIL:-admin@coolify.local}
+      ROOT_USER_PASSWORD: ${ROOT_USER_PASSWORD:-CoolifyAdmin123!}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - coolifydata:/data/coolify
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/stack-migration/Dockerfile
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/coolify-worker"]
+    command: ["-executor-bin", "/usr/local/bin/coolify-executor", "-server-concurrency", "4"]
+    environment:
+      DATABASE_URL: postgres://${DB_USERNAME:-coolify}:${DB_PASSWORD:-coolify-dev-secret}@postgres:5432/${DB_DATABASE:-coolify}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PREFIX: ${REDIS_PREFIX:-coolify:go:v1:}
+      APP_KEY: ${APP_KEY:-base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      controlplane:
+        condition: service_healthy
+    volumes:
+      - coolifydata:/data/coolify
+
+volumes:
+  pgdata:
+  redisdata:
+  coolifydata:

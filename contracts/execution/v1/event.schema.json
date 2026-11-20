@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coolify.local/contracts/execution/v1/event.schema.json",
+  "title": "ExecutionEvent",
+  "type": "object",
+  "required": ["protocol_version", "event_type", "operation_id", "attempt_id", "sequence"],
+  "properties": {
+    "protocol_version": { "type": "string", "const": "v1" },
+    "event_type": { "type": "string", "enum": ["started", "output", "exited", "error"] },
+    "operation_id": { "type": "string" },
+    "attempt_id": { "type": "string" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "stream": { "type": "string", "enum": ["stdout", "stderr", "pty"] },
+    "encoding": { "type": "string", "enum": ["utf8", "base64"] },
+    "data": { "type": "string" },
+    "exit_code": { "type": "integer" },
+    "error_code": { "type": "string" },
+    "message": { "type": "string" }
+  }
+}

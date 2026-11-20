@@ -1,0 +1,16 @@
+{
+    "name": "Goolify",
+    "short_name": "Goolify",
+    "description": "Self-hostable PaaS built with Go, Rust, and Astro + Vue. Based on Coolify.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#0B1220",
+    "theme_color": "#0B1220",
+    "icons": [
+        { "src": "/goolify-logo.svg", "type": "image/svg+xml", "sizes": "any" },
+        { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+        { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" },
+        { "src": "/icon-maskable-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+    ]
+}

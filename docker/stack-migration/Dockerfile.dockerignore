@@ -1,0 +1,11 @@
+**/.git
+/node_modules
+/vendor
+apps/web/node_modules
+apps/web/dist
+apps/web/.astro
+executor/target
+migration/receipts
+storage/
+.env
+.env.*

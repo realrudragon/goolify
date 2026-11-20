@@ -1,0 +1,26 @@
+{
+  "measured_at": "2026-11-20T03:14:47.797Z",
+  "stack": "standalone-astro-vue3.5-go-rust",
+  "image_size_mb": 47.45,
+  "controlplane_idle_rss_mb": 62.17,
+  "controlplane_active_rss_mb": 67.09,
+  "worker_rss_mb": 61.77,
+  "api_latency_ms": {
+    "samples": 100,
+    "p50": 3.89,
+    "p95": 12.91,
+    "p99": 20.44
+  },
+  "concurrent_deployments": {
+    "queued": 10,
+    "processed": 10,
+    "elapsed_sec": 4.32,
+    "throughput_per_sec": 2.31
+  },
+  "sse_log_streaming": {
+    "lines_received": 100,
+    "lines_per_sec": 5481.1
+  },
+  "terminal_roundtrip_ms": 252.75,
+  "restart_recovery_verified": true
+}

@@ -1,0 +1,219 @@
+# =============================================================================
+# Goolify .gitignore
+# Standalone Astro + Vue 3.5 + TypeScript | Go 1.26 | Rust | PostgreSQL 16 | Redis 7
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# AI assistant / coding agent files (local only, never committed)
+# -----------------------------------------------------------------------------
+# Instruction & memory files (any folder)
+AGENTS.md
+AGENT.md
+agents.md
+agent.md
+CLAUDE.md
+CLAUDE.local.md
+claude.md
+GEMINI.md
+gemini.md
+COPILOT.md
+copilot-instructions.md
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+.github/chatmodes/
+CONVENTIONS.md
+.cursorrules
+.windsurfrules
+.clinerules
+.clinerules/
+.roorules
+.goosehints
+*.mdc
+
+# Agent tool folders
+.agents/
+.agent/
+.ai/
+.claude/
+.codex/
+.cursor/
+.windsurf/
+.gemini/
+.cline/
+.roo/
+.kiro/
+.continue/
+.aider*
+.opencode/
+.zed/
+.trae/
+.amazonq/
+.junie/
+.augment/
+.qodo/
+.tabnine/
+.sourcegraph/
+.superpowers/
+docs/superpowers/
+
+# Agent tool configs / MCP / skills lockfiles
+.mcp.json
+mcp.json
+opencode.json
+jean.json
+skills-lock.json
+boost.json
+vet.json
+
+# -----------------------------------------------------------------------------
+# Secrets & environment
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.backup
+.env.secrets
+auth.json
+*.pem
+*.key
+!templates/**/*.key
+id_rsa*
+id_ed25519*
+/.ssh/
+.dev/testing-host-key
+.dev/testing-host-key.pub
+.dev/lima/ssh.config
+.dev/lima/ssh_key
+.dev/lima/hosts
+.dev/bin/
+.dev/coold-assets/
+.dev-instances/
+
+# -----------------------------------------------------------------------------
+# Frontend (apps/web — Astro + Vue 3.5 + TypeScript)
+# -----------------------------------------------------------------------------
+node_modules/
+apps/web/dist/
+apps/web/.astro/
+.astro/
+*.tsbuildinfo
+.vite/
+.eslintcache
+.stylelintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+
+# -----------------------------------------------------------------------------
+# Go backend (backend/)
+# -----------------------------------------------------------------------------
+/backend/bin/
+/backend/tmp/
+/backend/coolify-controlplane
+/backend/coolify-worker
+/backend/coolify-migrate
+/backend/coolify-cli
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+coverage.txt
+coverage.html
+cover.out
+go.work
+go.work.sum
+
+# -----------------------------------------------------------------------------
+# Rust executor (executor/)
+# -----------------------------------------------------------------------------
+/executor/target/
+/executor/**/target/
+**/*.rs.bk
+*.pdb
+
+# -----------------------------------------------------------------------------
+# Tests, E2E & benchmark artifacts
+# -----------------------------------------------------------------------------
+/test-results/
+/playwright-report/
+/blob-report/
+/coverage/
+tests/stack-migration/screenshots/
+tests/stack-migration/.tmp/
+tests/Browser/Screenshots/
+tests/v4/Browser/Screenshots/
+/tests/Fixtures/parser/expected/templates/
+scripts/load-test/*
+
+# -----------------------------------------------------------------------------
+# Local Docker data / volumes
+# -----------------------------------------------------------------------------
+/_data/
+_volumes/
+_testing_hosts/
+/data/
+/.workspaces/
+/ref/
+
+# -----------------------------------------------------------------------------
+# Logs, caches & temp files
+# -----------------------------------------------------------------------------
+*.log
+/logs/
+/tmp/
+/.cache/
+*.tmp
+*.swp
+*.swo
+*~
+.rnd
+.lesshst
+.bash_history
+.psql_history
+psysh_history
+
+# -----------------------------------------------------------------------------
+# Editors & OS
+# -----------------------------------------------------------------------------
+/.idea/
+/.vscode/
+/.fleet/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# -----------------------------------------------------------------------------
+# Legacy Laravel/PHP leftovers (removed in Task 14; guard against re-adding)
+# -----------------------------------------------------------------------------
+/vendor/
+/public/build/
+/public/hot/
+/public/storage/
+/storage/*.key
+/.phpunit.cache/
+.phpunit.result.cache
+.ignition.json
+.env.dusk.local
+_ide_helper.php
+_ide_helper_models.php
+.phpstorm.meta.php
+Homestead.json
+Homestead.yaml
+
+# -----------------------------------------------------------------------------
+# Marketing media (large binaries)
+# -----------------------------------------------------------------------------
+/marketing/**/*.mp4
+/marketing/**/*.mov
+/marketing/**/*.webm
+/marketing/**/build/

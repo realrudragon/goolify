@@ -1,0 +1,152 @@
+/* Portable design tokens preserved verbatim from DESIGN.md */
+:root {
+  --ui-font-sans: 'Geist Sans', Inter, system-ui, sans-serif;
+  --ui-font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ui-canvas: oklch(98.5% 0 0);
+  --ui-panel: #ffffff;
+  --ui-card-bg: rgb(0 0 0 / 0.75%);
+  --ui-card-border: rgb(0 0 0 / 9%);
+  --ui-well-bg: #ffffff;
+  --ui-well-border: rgb(0 0 0 / 8%);
+  --ui-well-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+  --ui-control-bg: oklch(96% 0 0);
+  --ui-control-border: oklch(14.5% 0 0 / 0.1);
+  --ui-menu-bg: oklch(96% 0 0);
+  --ui-menu-border: oklch(14.5% 0 0 / 0.1);
+  --ui-hover: oklch(92.2% 0 0);
+  --ui-divider: oklch(92.2% 0 0);
+  --ui-chrome-border: rgb(0 0 0 / 6%);
+
+  --ui-fg: oklch(14.5% 0 0);
+  --ui-fg-dim: oklch(40% 0 0);
+  --ui-fg-faint: oklch(50% 0 0);
+
+  --ui-accent: oklch(49.65% 0.2709 289.33);
+  --ui-accent-top: oklch(52.34% 0.287 289.16);
+  --ui-accent-bottom: oklch(43.76% 0.2369 289.82);
+  --ui-accent-edge: oklch(38.04% 0.2031 290.47);
+  --ui-accent-fg: #ffffff;
+  --ui-success: oklch(48% 0.135 149.58);
+  --ui-warning: oklch(50% 0.105 80);
+  --ui-error: oklch(52% 0.2 27.33);
+
+  --ui-card-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  --ui-menu-shadow: 0 4px 12px rgb(0 0 0 / 0.12), 0 2px 4px rgb(0 0 0 / 0.08);
+  --ui-depth-color: rgb(0 0 0 / 0.22);
+}
+
+.dark {
+  --ui-canvas: #0a0a0a;
+  --ui-panel: #121212;
+  --ui-card-bg: rgb(255 255 255 / 6%);
+  --ui-card-border: rgb(255 255 255 / 8%);
+  --ui-well-bg: rgb(0 0 0 / 34%);
+  --ui-well-border: rgb(255 255 255 / 7%);
+  --ui-well-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+  --ui-control-bg: rgb(255 255 255 / 3%);
+  --ui-control-border: rgb(255 255 255 / 8%);
+  --ui-menu-bg: oklch(25.2% 0 0);
+  --ui-menu-border: oklch(36% 0 0);
+  --ui-hover: oklch(29.31% 0 0);
+  --ui-divider: rgb(255 255 255 / 7%);
+  --ui-chrome-border: rgb(255 255 255 / 4%);
+
+  --ui-fg: oklch(96.12% 0 0);
+  --ui-fg-dim: oklch(76.99% 0 0);
+  --ui-fg-faint: oklch(65% 0 0);
+
+  --ui-accent: #6b16ed;
+  --ui-accent-top: #7317ff;
+  --ui-accent-bottom: #5a12c7;
+  --ui-accent-edge: #4a0fa3;
+  --ui-accent-fg: #ffffff;
+  --ui-accent-light: #a391ff;
+  --ui-sidebar: #120e1a;
+  --ui-card: #121212;
+  --ui-success: oklch(72.27% 0.192 149.58);
+  --ui-warning: oklch(88.13% 0.1507 91.7);
+  --ui-error: oklch(66% 0.2 27.33);
+  --ui-depth-color: rgb(255 255 255 / 0.08);
+}
+
+html,
+body {
+  margin: 0;
+  background-color: var(--ui-canvas);
+  color: var(--ui-fg);
+  font-family: var(--ui-font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--ui-accent-light, var(--ui-accent));
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.coolify-card {
+  background: var(--ui-card-bg);
+  border: 1px solid var(--ui-card-border);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: var(--ui-card-shadow);
+}
+
+.coolify-well {
+  background: var(--ui-well-bg);
+  border: 1px solid var(--ui-well-border);
+  border-radius: 7px;
+  padding: 12px 14px;
+  box-shadow: var(--ui-well-shadow);
+}
+
+.coolify-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid var(--ui-control-border);
+  border-bottom-width: 2px;
+  background: var(--ui-control-bg);
+  color: var(--ui-fg);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.coolify-btn-primary {
+  background: linear-gradient(180deg, var(--ui-accent-top), var(--ui-accent-bottom));
+  border-color: var(--ui-accent-edge);
+  color: var(--ui-accent-fg);
+}
+
+.coolify-input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--ui-control-border);
+  background: var(--ui-control-bg);
+  color: var(--ui-fg);
+  font-size: 13px;
+}
+
+.coolify-nav-link {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--ui-fg-dim);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.coolify-nav-link:hover {
+  background: var(--ui-hover);
+  color: var(--ui-fg);
+}

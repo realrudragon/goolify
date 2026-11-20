@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: 💬 Questions and ideas
+    url: https://github.com/realrudragon/goolify/discussions
+    about: Ask questions or suggest features for Goolify in GitHub Discussions.
+
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/realrudragon/goolify/security/advisories/new
+    about: Please report vulnerabilities privately. Do not open a public issue.
+
+  - name: ❄️ Using upstream Coolify (not Goolify)?
+    url: https://github.com/coollabsio/coolify
+    about: Goolify is an independent project. For issues with the original Coolify, please use the official Coolify repository and community.

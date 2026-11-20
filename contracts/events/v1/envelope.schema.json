@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coolify.local/contracts/events/v1/envelope.schema.json",
+  "title": "DomainEventEnvelope",
+  "type": "object",
+  "required": [
+    "event_id",
+    "schema_version",
+    "producer",
+    "team_id",
+    "resource_type",
+    "resource_uuid",
+    "aggregate_revision",
+    "ownership_epoch",
+    "mutation_type",
+    "committed_at"
+  ],
+  "properties": {
+    "event_id": { "type": "string" },
+    "schema_version": { "type": "string", "const": "v1" },
+    "producer": { "type": "string", "enum": ["go-controlplane", "go-worker"] },
+    "team_id": { "type": "integer", "minimum": 0 },
+    "resource_type": { "type": "string" },
+    "resource_uuid": { "type": "string" },
+    "aggregate_revision": { "type": "integer", "minimum": 1 },
+    "ownership_epoch": { "type": "integer", "minimum": 1 },
+    "mutation_type": { "type": "string" },
+    "committed_at": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

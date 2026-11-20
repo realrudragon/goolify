@@ -1,0 +1,13 @@
+[package]
+name = "coolify-runner"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "coolify-executor"
+path = "src/main.rs"
+
+[dependencies]
+coolify-protocol = { path = "../protocol" }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["full"] }

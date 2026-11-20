@@ -1,0 +1,8 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+import DashboardRoot from '../features/dashboard/DashboardRoot.vue';
+---
+<AppLayout title="Goolify Dashboard">
+  <h1 style="margin:0 0 12px;font-size:18px;">Control Plane</h1>
+  <DashboardRoot client:load />
+</AppLayout>

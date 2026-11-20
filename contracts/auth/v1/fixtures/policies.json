@@ -1,0 +1,52 @@
+{
+  "schema_version": "v1",
+  "description": "Synthetic authorization fixture matrix aligned with app/Policies and SECURITY.md boundaries.",
+  "cases": [
+    {
+      "name": "switched_session_member_read_own_resource_team",
+      "user_id": 2,
+      "session_team_id": 20,
+      "team_roles": { "10": "member", "20": "owner" },
+      "resource": { "type": "server", "id": 100, "team_id": 10 },
+      "action": "read",
+      "expected_allow": true
+    },
+    {
+      "name": "switched_session_member_write_denied_despite_other_team_owner",
+      "user_id": 2,
+      "session_team_id": 20,
+      "team_roles": { "10": "member", "20": "owner" },
+      "resource": { "type": "server", "id": 100, "team_id": 10 },
+      "action": "update",
+      "expected_allow": false
+    },
+    {
+      "name": "cross_team_access_denied",
+      "user_id": 2,
+      "session_team_id": 20,
+      "team_roles": { "20": "owner" },
+      "resource": { "type": "application", "id": 55, "team_id": 30 },
+      "action": "read",
+      "expected_allow": false
+    },
+    {
+      "name": "member_with_resource_write_grant_allowed_on_granted_resource_only",
+      "user_id": 3,
+      "session_team_id": 10,
+      "team_roles": { "10": "member" },
+      "resource_grants": [{ "resource_type": "application", "resource_id": 77, "team_id": 10, "level": "write" }],
+      "resource": { "type": "application", "id": 77, "team_id": 10 },
+      "action": "deploy",
+      "expected_allow": true
+    },
+    {
+      "name": "root_team_id_0_instance_settings_admin_only",
+      "user_id": 0,
+      "session_team_id": 0,
+      "team_roles": { "0": "owner" },
+      "resource": { "type": "instance_settings", "id": 0, "team_id": 0 },
+      "action": "update",
+      "expected_allow": true
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+# Isolated Cutover Rehearsal Composition (Task 13)
+# Boots standalone Go + Rust + Astro/Vue (vue@^3.5.45) against a restored backup clone without touching live production.
+services:
+  cutover-preflight:
+    build:
+      context: ../..
+      dockerfile: docker/stack-migration/Dockerfile
+    entrypoint: ["/usr/local/bin/coolify-migrate"]
+    command: ["--dry-run=true", "--cutover-preflight=true"]
+    environment:
+      DATABASE_URL: ${REHEARSAL_DB_URL}
+      APP_KEY: ${APP_KEY}
+
+  controlplane:
+    build:
+      context: ../..
+      dockerfile: docker/stack-migration/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: ${REHEARSAL_DB_URL}
+      REDIS_URL: ${REHEARSAL_REDIS_URL}
+      REDIS_PREFIX: "coolify:go:v1:"
+      APP_KEY: ${APP_KEY}
+      APP_URL: ${APP_URL:-http://localhost:8000}
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/stack-migration/Dockerfile
+    entrypoint: ["/usr/local/bin/coolify-worker"]
+    command: ["-executor-bin", "/usr/local/bin/coolify-executor"]
+    environment:
+      DATABASE_URL: ${REHEARSAL_DB_URL}
+      REDIS_URL: ${REHEARSAL_REDIS_URL}
+      REDIS_PREFIX: "coolify:go:v1:"
+      APP_KEY: ${APP_KEY}

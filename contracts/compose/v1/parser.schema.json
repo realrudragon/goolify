@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coolify.local/contracts/compose/v1/parser.schema.json",
+  "title": "ComposeParseContract",
+  "type": "object",
+  "required": ["parser_version", "raw_compose", "resource_uuid", "team_id"],
+  "properties": {
+    "parser_version": { "type": "string" },
+    "raw_compose": { "type": "string" },
+    "resource_uuid": { "type": "string" },
+    "team_id": { "type": "integer", "minimum": 0 },
+    "proxy_type": { "type": "string", "enum": ["traefik", "caddy", "none"] },
+    "fqdn": { "type": "string" },
+    "env": { "type": "object", "additionalProperties": { "type": "string" } }
+  }
+}

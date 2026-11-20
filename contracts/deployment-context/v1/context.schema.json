@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coolify.local/contracts/deployment-context/v1/context.schema.json",
+  "title": "DeploymentContext",
+  "type": "object",
+  "required": [
+    "application_uuid",
+    "project_uuid",
+    "environment_uuid",
+    "resource_team_id",
+    "server_uuid",
+    "input_revision",
+    "build_pack",
+    "env_entries"
+  ],
+  "properties": {
+    "application_uuid": { "type": "string" },
+    "project_uuid": { "type": "string" },
+    "environment_uuid": { "type": "string" },
+    "resource_team_id": { "type": "integer", "minimum": 0 },
+    "preview_id": { "type": ["integer", "null"] },
+    "server_uuid": { "type": "string" },
+    "build_pack": { "type": "string", "enum": ["dockerfile", "railpack", "dockerimage", "dockercompose", "static", "nixpacks"] },
+    "input_revision": { "type": "string" },
+    "git_source_uuid": { "type": "string" },
+    "private_key_uuid": { "type": "string" },
+    "env_entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "value", "scope", "is_buildtime", "is_runtime", "is_literal", "is_locked"],
+        "properties": {
+          "key": { "type": "string" },
+          "value": { "type": "string" },
+          "scope": { "type": "string", "enum": ["team", "project", "environment", "resource", "preview"] },
+          "is_buildtime": { "type": "boolean" },
+          "is_runtime": { "type": "boolean" },
+          "is_literal": { "type": "boolean" },
+          "is_locked": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

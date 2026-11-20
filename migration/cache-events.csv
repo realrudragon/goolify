@@ -1,0 +1,13 @@
+mutation_type,resource_type,eloquent_hook_or_trait,redis_version_key_pattern,realtime_channel,realtime_event,owner
+server.created,server,HasSafeStringAttribute|ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},ServerStatusChanged,go-controlplane
+server.updated,server,HasSafeStringAttribute|ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},ServerStatusChanged,go-controlplane
+server.deleted,server,ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},ServerStatusChanged,go-controlplane
+application.status_changed,application,ApplicationStatusChanged,coolify:go:v1:team:{team_id}:app_status_ver,team.{team_id},ApplicationStatusChanged,go-worker
+application.updated,application,ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},ApplicationStatusChanged,go-controlplane
+service.status_changed,service,ServiceStatusChanged,coolify:go:v1:team:{team_id}:service_status_ver,team.{team_id},ServiceStatusChanged,go-worker
+service.updated,service,ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},ServiceStatusChanged,go-controlplane
+database.status_changed,database,DatabaseStatusChanged,coolify:go:v1:team:{team_id}:db_status_ver,team.{team_id},DatabaseStatusChanged,go-worker
+proxy.status_changed,proxy,ProxyStatusChanged,coolify:go:v1:team:{team_id}:proxy_status_ver,team.{team_id},ProxyStatusChanged,go-worker
+project.updated,project,ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},ProjectUpdated,go-controlplane
+environment.updated,environment,ClearsGlobalSearchCache,coolify:go:v1:team:{team_id}:search_ver,team.{team_id},EnvironmentUpdated,go-controlplane
+team.grant_revoked,access,RevokesActiveTokensAndStreams,coolify:go:v1:user:{user_id}:auth_ver,user.{user_id},AccessRevoked,go-controlplane
