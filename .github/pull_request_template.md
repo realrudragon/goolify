@@ -34,4 +34,3 @@
 - [ ] I have read the [contributing guide](../CONTRIBUTING.md).
 - [ ] I added or updated tests for this change.
 - [ ] I kept upstream Coolify attribution (`LICENSE`, `NOTICE`, copyright notices) intact.
-- [ ] If this change also improves upstream Coolify (for example a service template), I considered contributing it to [coollabsio/coolify](https://github.com/coollabsio/coolify) as well.

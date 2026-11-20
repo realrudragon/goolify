@@ -140,11 +140,12 @@ node --test tests/stack-migration/packaging-benchmark.spec.ts
 
 ## ❤️ Support the Original Project
 
+Goolify is a hobby project maintained in spare time — feel free to **fork it**, customize it, or **open a pull request** to help develop it further.
+
 Goolify would not exist without Coolify. The product design, the data model, and the 380+ one-click service templates come from years of work by Andras Bacsai and hundreds of Coolify contributors. If Goolify is useful to you, please also:
 
 - ⭐ Star [coollabsio/coolify](https://github.com/coollabsio/coolify)
 - 💜 Sponsor the Coolify maintainers: [coolify.io/sponsorships](https://coolify.io/sponsorships)
-- 🧩 Contribute new service templates upstream, so the whole community benefits
 
 ---
 

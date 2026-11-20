@@ -6,13 +6,11 @@ Go 1.26 control plane, a Rust executor, and an Astro + Vue 3.5 + TypeScript web 
 
 ## Please respect both projects
 
+- **Hobby & open-source project.** Goolify is a personal hobby project maintained in spare time and is not
+  updated on a fixed schedule. You are completely welcome to **fork this repository** for your own needs
+  or **submit pull requests** to help develop and improve Goolify.
 - **Goolify issues belong here.** Do not open issues, discussions, or pull requests about Goolify in the
   upstream Coolify repository. The Coolify maintainers do not maintain Goolify.
-- **Upstream improvements belong upstream.** If you improve something that also exists in Coolify
-  (for example a one-click service template in `templates/compose/`), please consider contributing it to
-  [coollabsio/coolify](https://github.com/coollabsio/coolify) first, following
-  [their contribution guide](https://github.com/coollabsio/coolify/blob/main/CONTRIBUTING.md).
-  Goolify can then pick it up from upstream, so everybody benefits.
 - **Keep attribution intact.** Do not remove or change upstream copyright notices, the `LICENSE`, or the
   `NOTICE` file. When you add or change files, your contribution is licensed under the
   [Apache License 2.0](./LICENSE).
