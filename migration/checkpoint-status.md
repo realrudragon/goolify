@@ -5,7 +5,41 @@
 > tests and inventory counts. They must not be used as evidence that every
 > original page, action, provider integration, or deployment path works identically.
 
-## Re-audit against the original pre-migration implementation (2026-11-21)
+## Screenshot-based dashboard correction (2026-11-21)
+
+The supplied second screenshot is the visual reference for the dashboard and
+shared navigation. The earlier shell-only changes did not match that screen.
+This correction replaces the root workbench with Projects and Servers tables
+and a separate Recent deployments column, using the current team's real data.
+
+- Restored grouped Monitoring, Integrations, Shared Variables, Team,
+  Notifications, Keys & Tokens and Settings navigation, plus Ctrl/Cmd+K search.
+- Moved the team switcher to the header and account controls to the sidebar
+  footer. Team switching returns to the dashboard, as in the original
+  `app/Livewire/SwitchTeam.php`.
+- Moved project creation behind its plus button, implemented the project gear
+  with the real PATCH endpoint, and kept server creation at `/servers/new`.
+- Wired sorting and table/grid/canvas controls. Secondary columns collapse on
+  mobile without expanding the document viewport.
+- Kept selected-server links from being overwritten by the list's default
+  selection, and linked recent deployments to their application history.
+- Closed page-owned realtime connections on navigation; restoring a cached
+  page reloads its request controllers. Mobile feedback closes its modal drawer.
+- Preserved the fork's identity and actual version. Resource names, deployment
+  state and usage values come from APIs, so they differ from the reference's data.
+
+Verification for this correction: frontend check/build passed; Chromium E2E
+passed 15 cases; contract/route/Compose checks passed 12 cases; upgrade regression
+passed 4 scenarios; Go passed 70 tests with 1 host-executor test skipped; Rust
+passed 10 tests in the Linux toolchain container. Current desktop and mobile
+screenshots are `migration/receipts/screenshots/07-original-dashboard.png` and
+`08-dashboard-mobile.png`.
+
+These changes restore the referenced dashboard and shared navigation. They do
+not establish complete visual or semantic parity for every resource page or
+authentication journey. The unresolved areas below still require verification.
+
+## Earlier re-audit against the pre-migration implementation (2026-11-21)
 
 The requested reference is the frozen original Coolify commit
 `171eae00a76dff4f5a02c2b5130d7b2dfe219a7d`, not the latest upstream branch.
@@ -20,7 +54,8 @@ is retained.
   keyboard focus and a mobile sign-out control.
 - Added persistent light/dark theme selection applied before rendering, original
   Geist fonts and the original outline navigation icons. Custom themes,
-  original navigation submenus and resource-specific menus remain outstanding.
+  resource-specific menus remain outstanding; the correction above now supplies
+  the original top-level navigation submenus.
 - Restored the original auth card dimensions and basic visual structure, with
   explicit input labels, autocomplete and duplicate-submit protection. This
   does not restore the complete original authentication experience.
@@ -54,7 +89,7 @@ new containers on ports 15432/16379, not the other project's PostgreSQL/Redis.
 
 | Area | Confirmed gap or unverified behavior | Owning implementation / required evidence |
 |---|---|---|
-| Navigation and page structure | The original hierarchical submenus, global search, role-dependent visibility and resource navigation are missing; the port still combines multiple screens into workspace panels | `apps/web/src/layouts/AppLayout.astro`, `DashboardRoot.vue`; port original `navbar.blade.php` and each route's screen, then compare desktop/mobile and light/dark states |
+| Navigation and page structure | Dashboard tables, global search, top-level submenus and basic role-dependent visibility are now restored. Resource-specific navigation and individual resource/settings screens still use combined panels and need further parity checks | `DashboardRoot.vue` and the per-resource feature panels; port each original route's screen and verify its access grants, desktop/mobile and light/dark states |
 | Authentication UX | Forgot-password, registration status, conditional OAuth/passkey entry points and separate auth challenge screens are not equivalent to the original | `LoginPanel.vue`, `v1_slice13_web_canvas.go`; exercise each original auth journey, including provider failure and challenge recovery |
 | Password recovery | The handler prepares a one-time token and returns a success message, but that handler contains no email dispatch | `handleForgotPassword`; prove email delivery and completion of a password reset, not only token insertion |
 | OAuth | The generic implementation uses an illustrative `.example` authorization fallback and a custom `/userinfo?code=` request rather than a demonstrated provider-specific authorization-code exchange | `handleOAuthFlow`; verify the configured real providers' complete flows before claiming support |

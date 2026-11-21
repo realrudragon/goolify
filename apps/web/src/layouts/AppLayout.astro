@@ -1,19 +1,14 @@
 ---
 import '../styles/tokens.css';
-import LogoutButton from '../features/auth/LogoutButton.vue';
+import '../styles/workspace.css';
 import ThemeInit from '../components/ThemeInit.astro';
-
+import SidebarNavigation from '../components/SidebarNavigation.vue';
+import AccountMenu from '../components/AccountMenu.vue';
+import GlobalSearch from '../components/GlobalSearch.vue';
+import TeamAccess from '../features/teams/TeamAccess.vue';
+import packageInfo from '../../package.json';
 interface Props { title?: string }
 const { title = 'Goolify' } = Astro.props;
-const icons: Record<string, string> = {
-  Dashboard: 'dashboard', Projects: 'projects', Analytics: 'analytics', Metrics: 'graph', Security: 'shield-alert', Terminal: 'browser-terminal', Servers: 'servers', Sources: 'sources', Destinations: 'destinations', Registries: 'layers', Storage: 'storages', 'Shared Variables': 'variables', Team: 'teams', Notifications: 'notifications', 'API Tokens': 'code', 'Cloud Tokens': 'cloud', 'Integration Tokens': 'network', Tags: 'tags', Settings: 'settings',
-};
-// Navigation labels and groups follow the frozen Coolify navbar.
-const groups = [
-  { name: 'Workspace', links: [['Dashboard', '/'], ['Projects', '/projects'], ['Analytics', '/analytics'], ['Metrics', '/metrics'], ['Security', '/vulnerabilities'], ['Terminal', '/terminal']] },
-  { name: 'Infrastructure', links: [['Servers', '/servers'], ['Sources', '/sources'], ['Destinations', '/destinations'], ['Registries', '/registries'], ['Storage', '/storages'], ['Shared Variables', '/shared-variables/team']] },
-  { name: 'Manage', links: [['Team', '/team'], ['Notifications', '/notifications/email'], ['API Tokens', '/security/api-tokens'], ['Cloud Tokens', '/security/cloud-tokens'], ['Integration Tokens', '/security/integration-tokens'], ['Tags', '/tags'], ['Settings', '/settings']] },
-];
 ---
 <!doctype html>
 <html lang="en" class="dark">
@@ -23,100 +18,54 @@ const groups = [
     <title>{title}</title>
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" href="/goolify-logo.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/site.webmanifest" />
     <ThemeInit />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
-    <div class="app-shell">
-      <header class="app-topbar" data-testid="app-topbar">
-        <a class="app-brand" href="/" aria-label="Goolify dashboard">
-          <img class="app-brand-mark" src="/goolify-logo.svg" alt="" width="20" height="20" />
-          <span class="app-brand-label">Goolify</span>
-        </a>
-        <div class="app-topbar-content">
-          <button class="chrome-button" type="button" data-testid="sidebar-collapse" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="desktop-sidebar">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
-          </button>
-          <span class="app-breadcrumb" data-page-label>Dashboard</span>
-          <div class="app-topbar-actions">
-            <button class="chrome-button" type="button" data-testid="theme-toggle" aria-label="Switch to light theme">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></svg>
-            </button>
-            <a class="chrome-button" href="/profile" aria-label="Profile">Profile</a>
-            <button class="chrome-button mobile-menu-toggle" type="button" data-testid="mobile-menu-toggle" aria-label="Open navigation menu" aria-haspopup="dialog" aria-controls="mobile-navigation">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
-            </button>
-          </div>
-        </div>
-      </header>
-      <aside id="desktop-sidebar" class="app-sidebar" data-testid="app-sidebar">
-        <nav aria-label="Primary navigation">
-          {groups.map(group => <div class="app-nav-group">
-            <p class="app-nav-heading">{group.name}</p>
-            {group.links.map(([label, href]) => <a href={href} class="coolify-nav-link" title={label}>
-              <span class="app-nav-glyph" aria-hidden="true"><span class="app-nav-icon" style={`mask-image:url('/icons/${icons[label]}.svg')`}></span></span><span class="app-nav-label">{label}</span>
-            </a>)}
-          </div>)}
-        </nav>
-        <div class="app-sidebar-footer">
-          <LogoutButton client:load />
-          <p class="app-attribution" data-testid="upstream-attribution">Based on <a href="https://github.com/coollabsio/coolify" target="_blank" rel="noopener noreferrer">Coolify</a> by Andras Bacsai and the CoolLabs community.</p>
-        </div>
-      </aside>
-      <dialog id="mobile-navigation" class="mobile-navigation" data-testid="mobile-menu" aria-label="Navigation menu">
-        <div class="mobile-navigation-heading"><strong>Goolify</strong><button class="chrome-button" type="button" data-close-navigation aria-label="Close navigation menu">✕</button></div>
-        <nav aria-label="Mobile navigation">
-          {groups.map(group => <div class="app-nav-group"><p class="app-nav-heading">{group.name}</p>{group.links.map(([label, href]) => <a href={href} class="coolify-nav-link">{label}</a>)}</div>)}
-        </nav>
-        <div class="app-sidebar-footer"><LogoutButton client:load /></div>
-      </dialog>
-      <main id="main-content" class="app-main" tabindex="-1"><slot /></main>
-    </div>
+    <header class="app-topbar" data-testid="app-topbar">
+      <a class="app-brand" href="/" aria-label="Goolify dashboard"><img class="app-brand-mark" src="/goolify-logo.svg" alt="" width="20" height="20" /><span class="app-brand-label">Goolify</span><span class="app-version" title={packageInfo.version}>v{packageInfo.version}</span></a>
+      <div class="app-topbar-content">
+        <TeamAccess client:load />
+        <span class="breadcrumb-divider" aria-hidden="true">/</span><span class="app-breadcrumb" data-page-label>Dashboard</span>
+        <button class="chrome-button mobile-menu-toggle" type="button" data-testid="mobile-menu-toggle" aria-label="Open navigation menu" aria-haspopup="dialog" aria-controls="mobile-navigation"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
+      </div>
+    </header>
+    <aside id="desktop-sidebar" class="app-sidebar" data-testid="app-sidebar">
+      <SidebarNavigation client:load />
+      <div class="sidebar-account-row"><AccountMenu client:load /><button class="chrome-button" type="button" data-testid="sidebar-collapse" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="desktop-sidebar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg></button></div>
+    </aside>
+    <dialog id="mobile-navigation" class="mobile-navigation" data-testid="mobile-menu" aria-label="Navigation menu">
+      <div class="mobile-navigation-heading"><strong>Goolify</strong><button class="chrome-button" type="button" data-close-navigation aria-label="Close navigation menu">✕</button></div>
+      <SidebarNavigation mobile client:load />
+      <div class="sidebar-account-row"><AccountMenu client:load /></div>
+    </dialog>
+    <main id="main-content" class="app-main" tabindex="-1"><slot /></main>
+    <GlobalSearch client:load />
+    <p class="sr-only" data-testid="upstream-attribution">Goolify is based on Coolify by Andras Bacsai and the CoolLabs community.</p>
     <script>
       const root = document.documentElement;
       const collapse = document.querySelector<HTMLButtonElement>('[data-testid="sidebar-collapse"]');
-      const theme = document.querySelector<HTMLButtonElement>('[data-testid="theme-toggle"]');
       const drawer = document.querySelector<HTMLDialogElement>('#mobile-navigation');
-      function updateChrome() {
-        const collapsed = root.dataset.sidebarCollapsed === 'true';
-        collapse?.setAttribute('aria-expanded', String(!collapsed));
-        collapse?.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
-        theme?.setAttribute('aria-label', root.classList.contains('dark') ? 'Switch to light theme' : 'Switch to dark theme');
+      function syncCollapse() {
+        const expanded = root.dataset.sidebarCollapsed !== 'true';
+        collapse?.setAttribute('aria-expanded', String(expanded));
+        collapse?.setAttribute('aria-label', expanded ? 'Collapse sidebar' : 'Expand sidebar');
       }
       collapse?.addEventListener('click', () => {
         root.dataset.sidebarCollapsed = String(root.dataset.sidebarCollapsed !== 'true');
-        try { localStorage.setItem('sidebarCollapsed', root.dataset.sidebarCollapsed); } catch { /* Storage can be disabled. */ }
-        updateChrome();
-      });
-      theme?.addEventListener('click', () => {
-        root.classList.toggle('dark');
-        try { localStorage.setItem('theme', root.classList.contains('dark') ? 'dark' : 'light'); } catch { /* Storage can be disabled. */ }
-        updateChrome();
+        try { localStorage.setItem('sidebarCollapsed', root.dataset.sidebarCollapsed); } catch { /* Browser storage is optional. */ }
+        syncCollapse();
       });
       document.querySelector('[data-testid="mobile-menu-toggle"]')?.addEventListener('click', () => drawer?.showModal());
       document.querySelector('[data-close-navigation]')?.addEventListener('click', () => drawer?.close());
-      drawer?.addEventListener('click', event => {
-        if (event.target !== drawer) return;
-        const rect = drawer.getBoundingClientRect();
-        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) drawer.close();
-      });
-      const pathname = window.location.pathname;
-      let activePath = pathname;
-      if (pathname.startsWith('/server/')) activePath = '/servers';
-      else if (pathname.startsWith('/project/')) activePath = '/projects';
-      else if (pathname.startsWith('/source/')) activePath = '/sources';
-      const navLinks = [...document.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Primary navigation"] a')];
-      const active = navLinks.filter(link => link.pathname === activePath || (link.pathname !== '/' && activePath.startsWith(link.pathname + '/'))).sort((a, b) => b.pathname.length - a.pathname.length)[0];
-      if (active) {
-        active.setAttribute('aria-current', 'page');
-        const mobileLink = [...document.querySelectorAll<HTMLAnchorElement>('nav[aria-label="Mobile navigation"] a')].find(link => link.pathname === active.pathname);
-        mobileLink?.setAttribute('aria-current', 'page');
-        const label = document.querySelector('[data-page-label]');
-        if (label) label.textContent = active.title;
-      }
-      updateChrome();
+      drawer?.addEventListener('click', event => { const rect = drawer.getBoundingClientRect(); if (event.target === drawer && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) drawer.close(); });
+      window.addEventListener('open-global-search', () => drawer?.close());
+      window.addEventListener('open-help-feedback', () => drawer?.close());
+      const path = location.pathname;
+      const label = path === '/' ? 'Dashboard' : path.startsWith('/project') ? 'Projects' : path.startsWith('/server') ? 'Servers' : path.split('/').filter(Boolean).map(part => part.replaceAll('-', ' ')).slice(0, 2).join(' / ');
+      const breadcrumb = document.querySelector('[data-page-label]');
+      if (breadcrumb) breadcrumb.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+      syncCollapse();
     </script>
   </body>
 </html>

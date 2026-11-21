@@ -842,17 +842,25 @@ muted summary instead of a bar. The environment identity and the way back to
 its resources already live in `x-top-breadcrumb`; do not restate them in a
 sub-header.
 
-The dashboard is a compact overview, not a metrics wall. It has no page header:
-live active deployments come first as a compact table, followed by traffic
-analytics when a server has it enabled, then two full-width sections (Projects,
-then Servers). Each section uses `x-section-heading` with a small "View all"
-link to its full index (next to the switcher) and a table / grid `x-canvas-view-toggle` (no canvas
-link). Table is the default; each section remembers its own choice. A page-level
-List / Canvas switch at the top opens `/dashboard/canvas`: the servers canvas
-with a "Deploying" / "Queued" pill on each application card that has an active
-deployment, and a foldable Recent deployments panel at the bottom left (active, then
-recent; a row shows its card, the status opens the deployment). Communicate server health with
-the shared status badge.
+The dashboard follows the supplied original Coolify reference: it has no page
+title, workspace debug card, combined-function tabs, or inline creation forms.
+Projects and Servers are stacked tables on the left. Recent deployments occupy
+the right column (352px from 1280px, 416px from 1536px), with a 32px column gap.
+Narrow screens stack these sections and omit secondary table columns.
+Table is the default; section controls switch to grid, and the Projects Canvas
+control opens the existing live canvas. The plus beside Projects opens its
+creation dialog; the plus beside Servers opens `/servers/new`. The project gear
+edits that project, and deployment entries open the represented application.
+Names, counts, status, metrics and deployment metadata come from the authorized
+API responses; missing data is shown as unavailable rather than invented.
+
+`DashboardHome.vue` owns this overview. `SidebarNavigation.vue` owns the original
+Monitoring, Integrations, Shared Variables, Team, Notifications, Keys & Tokens
+and Settings submenus. `GlobalSearch.vue` binds Ctrl/Cmd+K to API-backed search.
+`TeamAccess.vue` belongs in the header; a successful switch returns to the new
+team's dashboard, matching the original switcher. `AccountMenu.vue` belongs at
+the bottom of the sidebar. Shared workspace styles are in
+`apps/web/src/styles/workspace.css`; primitive tokens remain in `tokens.css`.
 
 ### Top-level dashboard destinations
 

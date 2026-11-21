@@ -126,6 +126,11 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
   let chromeProc;
   let cdp;
   let applicationDeepLink;
+  async function navigateWorkspace(section) {
+    const routes = { overview: '/', servers: '/servers', projects: '/projects', operations: '/terminal', databases: '/databases', sources: '/sources', security: '/vulnerabilities', settings: '/settings' };
+    await cdp.send('Page.navigate', { url: BASE_URL + routes[section] });
+    await cdp.waitFor(`document.querySelector('[data-workspace="${section}"][data-hydrated="true"]') !== null`);
+  }
 
   before(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'coolify-e2e-'));
@@ -264,7 +269,11 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
       document.querySelector('button[type="submit"]').click();
     })()`);
 
-    await cdp.waitFor(`window.location.pathname === '/' && document.body.innerText.includes('Active Team ID: 0') && document.body.innerText.includes('localhost')`);
+    await cdp.waitFor(`window.location.pathname === '/' && document.querySelector('[data-testid="active-team-id"]')?.dataset.teamId === '0' && document.body.innerText.includes('localhost')`);
+
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('table[aria-label="Projects"]')) && Boolean(document.querySelector('table[aria-label="Servers"]'))`), true, 'dashboard must use the original Projects and Servers tables');
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('[role="tablist"][aria-label="Workspace sections"]'))`), false, 'dashboard must not render the combined workbench tabs');
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('input[aria-label="Server Name"]'))`), false, 'server creation belongs behind its own action');
 
     const storageLen = await cdp.eval('window.localStorage.length');
     assert.equal(storageLen, 0, 'session tokens must NEVER be stored in localStorage');
@@ -273,6 +282,9 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     assert.match(cookies, /coolify_csrf=/, 'expected readable coolify_csrf cookie');
     assert.equal(cookies.includes('coolify_session='), false, 'coolify_session cookie must be HttpOnly');
 
+    // Create from the dashboard's original + action, rather than an inline form.
+    await cdp.eval(`document.querySelector('[data-testid="new-project"]').click()`);
+    await cdp.waitFor(`document.querySelector('dialog[aria-labelledby="new-project-title"]').open`);
     // Create a Project through the UI (uses real CSRF header -> PostgreSQL)
     await cdp.eval(`(() => {
       const input = document.querySelector('input[aria-label="New project name"]');
@@ -282,6 +294,9 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     })()`);
     await cdp.waitFor(`document.body.innerText.includes('Browser E2E Project')`);
 
+    await cdp.send('Page.navigate', { url: `${BASE_URL}/servers/new` });
+    await cdp.waitFor(`document.querySelector('input[aria-label="Server Name"]') !== null && document.querySelector('[data-workspace="servers"][data-hydrated="true"]') !== null`);
+    await cdp.waitFor(`Boolean(document.querySelector('select[aria-label="Private Key UUID"]')?.value)`);
     // Create a Server through the UI (uses real CSRF header -> PostgreSQL)
     await cdp.eval(`(() => {
       const name = document.querySelector('input[aria-label="Server Name"]');
@@ -292,7 +307,9 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
       ip.dispatchEvent(new Event('input', { bubbles: true }));
       name.closest('form').querySelector('button[type="submit"]').click();
     })()`);
-    await cdp.waitFor(`document.body.innerText.includes('edge-node-1')`);
+    await cdp.waitFor(`document.body.innerText.includes('Server registered')`);
+    await navigateWorkspace('overview');
+    await cdp.waitFor(`document.body.innerText.includes('Browser E2E Project') && document.body.innerText.includes('edge-node-1')`);
     await cdp.screenshot('02-dashboard.png');
 
     // Full browser reload MUST keep both records from PostgreSQL
@@ -302,7 +319,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
 
   it('switches teams via POST /app/auth/switch-team and clears stale Team 0 data with zero cross-team leakage', async () => {
     await cdp.eval(`document.querySelector('[data-testid="switch-team-20"]').click()`);
-    await cdp.waitFor(`document.querySelector('[data-testid="active-team-id"]')?.textContent?.includes('20') && document.body.innerText.includes('No servers in this team.')`);
+    await cdp.waitFor(`document.querySelector('[data-testid="active-team-id"]')?.dataset.teamId === '20' && document.body.innerText.includes('No servers in this team.')`);
     const bodyTeam20 = await cdp.eval('document.body.innerText');
     assert.equal(bodyTeam20.includes('edge-node-1'), false, 'Team 0 server leaked after switching to Team 20');
     assert.equal(bodyTeam20.includes('Browser E2E Project'), false, 'Team 0 project leaked after switching to Team 20');
@@ -310,12 +327,12 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
 
     // Switch back to Team 0
     await cdp.eval(`document.querySelector('[data-testid="switch-team-0"]').click()`);
-    await cdp.waitFor(`document.querySelector('[data-testid="active-team-id"]')?.textContent?.includes('0') && document.body.innerText.includes('edge-node-1')`);
+    await cdp.waitFor(`document.querySelector('[data-testid="active-team-id"]')?.dataset.teamId === '0' && document.body.innerText.includes('edge-node-1')`);
     await cdp.waitFor(`window.__realtimeURLs.filter(url => url.startsWith('/realtime/events?')).at(-1) === '/realtime/events?channel=team.0'`);
   });
 
   it('streams SSE logs XSS-safely and executes live commands over WebSocket terminal', async () => {
-    await cdp.eval(`document.querySelector('[data-testid="tab-operations"]').click()`);
+    await navigateWorkspace('operations');
 
     // Ensure resource UUID is set to 'localhost' to replay seeded XSS log line
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="log-resource-input"]'))`);
@@ -346,7 +363,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
   });
 
   it('creates and revokes a Sanctum API token in Settings & Transfer UI', async () => {
-    await cdp.eval(`document.querySelector('[data-testid="tab-settings"]').click()`);
+    await navigateWorkspace('settings');
     await cdp.waitFor(`Boolean(document.querySelector('input[aria-label="Token label"]'))`);
     await cdp.eval(`(() => {
       const inp = document.querySelector('input[aria-label="Token label"]');
@@ -365,7 +382,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
   });
 
   it('exercises Sources & Cloud and Security & Scans interactive Vue 3.5 panels', async () => {
-    await cdp.eval(`document.querySelector('[data-testid="tab-sources"]').click()`);
+    await navigateWorkspace('sources');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="sources-cloud-panel"]'))`);
     await cdp.eval(`(() => {
       const inp = document.querySelector('[data-testid="sources-cloud-panel"] input[placeholder="New GitHub App name"]');
@@ -376,7 +393,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     })()`);
     await cdp.waitFor(`document.body.innerText.includes('GitHub App created.') && document.body.innerText.includes('Browser GH Source')`);
 
-    await cdp.eval(`document.querySelector('[data-testid="tab-security"]').click()`);
+    await navigateWorkspace('security');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="security-vuln-panel"]'))`);
     await cdp.eval(`(() => {
       const btn = Array.from(document.querySelectorAll('[data-testid="security-vuln-panel"] button')).find(b => b.textContent.includes('Image Scanning:'));
@@ -387,8 +404,9 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
   });
 
   it('exercises real-DB Projects/Apps/Services, Databases/Backups/Schedules, ServerOps, Canvas persistence & Governance UI', async () => {
-    // 1. Canvas real position persistence in Overview
-    await cdp.eval(`document.querySelector('[data-testid="tab-overview"]').click()`);
+    // 1. Canvas real position persistence, opened using the dashboard view toggle.
+    await navigateWorkspace('overview');
+    await cdp.eval(`Array.from(document.querySelectorAll('.view-switcher button')).find(button => button.textContent.includes('Canvas')).click()`);
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="canvas-graph"]')) && !document.querySelector('[data-testid="canvas-graph"]').innerText.includes('(0 live nodes)')`);
     await cdp.eval(`(() => {
       const btn = Array.from(document.querySelectorAll('[data-testid="canvas-graph"] button')).find(b => b.textContent.includes('Save Layout'));
@@ -397,15 +415,15 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.waitFor(`document.body.innerText.includes('Canvas positions saved to PostgreSQL')`);
 
     // 2. Projects & Deploy: create real Project -> real Application + Compose Service
-    await cdp.eval(`document.querySelector('[data-testid="tab-projects"]').click()`);
+    await navigateWorkspace('projects');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="resources-manager"]'))`);
     await cdp.eval(`(() => {
       const inp = document.querySelector('input[aria-label="New project name"]');
-      inp.value = 'Browser E2E Project';
+      inp.value = 'Browser Resource Project';
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       inp.closest('form').querySelector('button[type="submit"]').click();
     })()`);
-    await cdp.waitFor(`document.body.innerText.includes('Project created: Browser E2E Project')`);
+    await cdp.waitFor(`document.body.innerText.includes('Project created: Browser Resource Project')`);
     // Refresh ResourcesManager so new project appears in select
     await cdp.eval(`(() => {
       const btn = Array.from(document.querySelectorAll('[data-testid="resources-manager"] button')).find(b => b.textContent.trim() === 'Refresh');
@@ -430,7 +448,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     })()`);
 
     // 3. Databases & Backups: create real PostgreSQL DB + real Backup Schedule shown in ScheduleList (zero hardcoded rows!)
-    await cdp.eval(`document.querySelector('[data-testid="tab-databases"]').click()`);
+    await navigateWorkspace('databases');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="database-panel"]'))`);
     await cdp.waitFor(`document.querySelector('[data-testid="database-panel"] select[aria-label="Target project"]')?.options?.length > 0`);
     await cdp.eval(`(() => {
@@ -444,7 +462,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.waitFor(`document.body.innerText.includes('Backup schedule saved:') && document.querySelector('[data-testid="schedule-list"]').innerText.includes('DB Backup')`);
 
     // 4. Servers tab: ServerOpsPanel (Swarm + Host Scan)
-    await cdp.eval(`document.querySelector('[data-testid="tab-servers"]').click()`);
+    await navigateWorkspace('servers');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="server-ops-panel"]'))`);
     await cdp.eval(`(() => {
       const btn = Array.from(document.querySelectorAll('[data-testid="server-ops-panel"] button')).find(b => b.textContent.includes('Record Host Scan'));
@@ -453,7 +471,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.waitFor(`document.body.innerText.includes('Host security scan recorded')`);
 
     // 5. Settings tab: GovernanceAndAuthPanel (Tag + MCP toggle)
-    await cdp.eval(`document.querySelector('[data-testid="tab-settings"]').click()`);
+    await navigateWorkspace('settings');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="governance-auth-panel"]'))`);
     await cdp.eval(`(() => {
       const inp = document.querySelector('[data-testid="governance-auth-panel"] input[placeholder="New tag name"]');
@@ -493,9 +511,84 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs')`);
   });
 
+  it('edits a project with its gear action and opens the selected non-first server', async () => {
+    await navigateWorkspace('overview');
+    await cdp.waitFor(`document.querySelector('button[aria-label="Configure Browser E2E Project"]') !== null`);
+    for (const table of ['Projects', 'Servers']) {
+      const names = await cdp.eval(`Array.from(document.querySelectorAll('table[aria-label="${table}"] tbody .resource-name strong')).map(name => name.textContent)`);
+      await cdp.eval(`document.querySelector('table[aria-label="${table}"] thead button').click()`);
+      await cdp.waitFor(`document.querySelector('table[aria-label="${table}"] tbody .resource-name strong').textContent === ${JSON.stringify(names.at(-1))}`);
+      const reversed = await cdp.eval(`Array.from(document.querySelectorAll('table[aria-label="${table}"] tbody .resource-name strong')).map(name => name.textContent)`);
+      assert.deepEqual(reversed, [...names].reverse());
+      await cdp.eval(`document.querySelector('table[aria-label="${table}"] thead button').click()`);
+    }
+    await cdp.eval(`document.querySelector('button[aria-label="Configure Browser E2E Project"]').click()`);
+    await cdp.waitFor(`document.querySelector('#new-project-title').textContent === 'Edit project'`);
+    await cdp.eval(`(() => { const input = document.querySelector('#project-description'); input.value = 'Dashboard configuration saved'; input.dispatchEvent(new Event('input', { bubbles: true })); input.closest('form').querySelector('button[type="submit"]').click(); })()`);
+    await cdp.waitFor(`document.querySelector('table[aria-label="Projects"]').innerText.includes('Dashboard configuration saved')`);
+    const saved = await cdp.eval(`fetch('/api/v1/projects').then(response => response.json()).then(projects => projects.find(project => project.name === 'Browser E2E Project').description)`);
+    assert.equal(saved, 'Dashboard configuration saved');
+    await cdp.eval(`Array.from(document.querySelectorAll('.servers-table .resource-name')).find(link => link.textContent.includes('edge-node-1')).click()`);
+    await cdp.waitFor(`document.querySelector('[data-workspace="servers"]') && document.querySelectorAll('main ul li').length > 1 && Array.from(document.querySelectorAll('main section strong')).some(title => title.textContent.trim() === 'edge-node-1')`);
+    await cdp.eval(`document.querySelector('[data-testid="switch-team-20"]').click()`);
+    await cdp.waitFor(`location.pathname === '/' && document.querySelector('[data-testid="active-team-id"]')?.dataset.teamId === '20' && document.body.innerText.includes('No servers in this team.')`);
+    assert.equal(await cdp.eval(`document.body.innerText.includes('edge-node-1')`), false);
+    await cdp.eval(`document.querySelector('[data-testid="switch-team-0"]').click()`);
+    await cdp.waitFor(`location.pathname === '/' && document.querySelector('[data-testid="active-team-id"]')?.dataset.teamId === '0' && document.body.innerText.includes('edge-node-1')`);
+  });
+
+  it('uses the original navigation groups and searches actual team resources with Ctrl+K', async () => {
+    await navigateWorkspace('overview');
+    await cdp.waitFor(`document.querySelector('nav[aria-label="Primary navigation"] button[title="Settings"]') !== null`);
+    const labels = await cdp.eval(`Array.from(document.querySelectorAll('nav[aria-label="Primary navigation"] .coolify-nav-link')).map(link => link.textContent.trim())`);
+    assert.deepEqual(labels, ['Dashboard', 'Projects', 'Monitoring', 'Terminal', 'Servers', 'Integrations', 'Shared Variables', 'Team', 'Notifications', 'Keys & Tokens', 'Tags', 'Settings']);
+    await cdp.eval(`document.querySelector('nav[aria-label="Primary navigation"] button[title="Monitoring"]').click()`);
+    await cdp.waitFor(`document.querySelector('nav[aria-label="Primary navigation"] a[href="/metrics"]') !== null`);
+    await cdp.eval(`document.querySelector('nav[aria-label="Primary navigation"] .nav-back').click()`);
+    await cdp.eval(`document.querySelector('nav[aria-label="Primary navigation"] button[title="Integrations"]').click()`);
+    await cdp.waitFor(`document.querySelector('nav[aria-label="Primary navigation"] a[href="/sources"]') !== null`);
+    await cdp.eval(`document.querySelector('nav[aria-label="Primary navigation"] .nav-back').click()`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'k', code: 'KeyK', modifiers: 2, windowsVirtualKeyCode: 75 });
+    await cdp.waitFor(`document.querySelector('dialog[aria-label="Search"]')?.open`);
+    await cdp.eval(`(() => { const input = document.querySelector('#global-search'); input.value = 'edge-node-1'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await cdp.waitFor(`document.querySelector('.search-results')?.innerText.includes('edge-node-1')`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.waitFor(`!document.querySelector('dialog[aria-label="Search"]').open`);
+  });
+
+  it('shows actual recent deployment metadata on the dashboard and retains the table layout on mobile', async () => {
+    const { uuid } = applicationDeepLink;
+    const response = await cdp.eval(`fetch('/api/v1/deploy?uuid=${uuid}', { method: 'POST', headers: { 'X-CSRF-TOKEN': decodeURIComponent(document.cookie.match(/(?:^|;\\s*)coolify_csrf=([^;]+)/)[1]) } }).then(response => response.status)`);
+    assert.equal(response, 202);
+    await navigateWorkspace('overview');
+    await cdp.waitFor(`document.querySelector('.recent-deployments')?.innerText.includes('browser-live-app')`);
+    assert.equal(await cdp.eval(`document.querySelector('.recent-deployments').innerText.includes('Queued')`), true);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1536, height: 864, deviceScaleFactor: 1, mobile: false });
+    await cdp.screenshot('07-original-dashboard.png');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    assert.equal(await cdp.eval(`window.innerWidth`), 390);
+    assert.equal(await cdp.eval(`document.documentElement.scrollWidth`), 390);
+    await cdp.screenshot('08-dashboard-mobile.png');
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await cdp.eval(`document.querySelector('.recent-deployment').click()`);
+    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs') && document.body.innerText.includes('Deployment History') && document.body.innerText.includes('queued')`);
+  });
+
+  it('opens feedback from the mobile account menu without leaving the main page inert', async () => {
+    await navigateWorkspace('overview');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await cdp.eval(`document.querySelector('[data-testid="mobile-menu-toggle"]').click()`);
+    await cdp.waitFor(`document.querySelector('[data-testid="mobile-menu"]').open`);
+    await cdp.eval(`document.querySelector('[data-testid="mobile-menu"] .account-trigger').click()`);
+    await cdp.eval(`Array.from(document.querySelectorAll('[data-testid="mobile-menu"] .account-popover button')).find(button => button.textContent.includes('Help & Feedback')).click()`);
+    await cdp.waitFor(`!document.querySelector('[data-testid="mobile-menu"]').open && document.querySelector('[data-testid="help-drawer"]') !== null`);
+    await cdp.eval(`document.querySelector('[aria-label="Close feedback"]').click()`);
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+  });
+
   it('preserves navigation, theme and mobile layout using the original Coolify shell dimensions', async () => {
     await cdp.send('Page.navigate', { url: `${BASE_URL}/servers` });
-    await cdp.waitFor(`document.querySelector('[data-testid="tab-servers"][aria-selected="true"]') !== null`);
+    await cdp.waitFor(`document.querySelector('[data-workspace="servers"][data-hydrated="true"]') !== null`);
     const desktop = await cdp.eval(`(() => {
       const sidebar = document.querySelector('[data-testid="app-sidebar"]');
       const header = document.querySelector('[data-testid="app-topbar"]');
@@ -535,6 +628,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await cdp.eval(`document.querySelector('[data-testid="mobile-menu-toggle"]').click()`);
     await cdp.waitFor(`document.querySelector('[data-testid="mobile-menu"]').open && document.querySelector('[data-testid="mobile-menu"] button.coolify-btn') !== null`);
+    await cdp.eval(`document.querySelector('[data-testid="mobile-menu"] .account-trigger').click()`);
     await cdp.eval(`(() => {
       const btns = Array.from(document.querySelectorAll('[data-testid="mobile-menu"] button'));
       const signOut = btns.find((b) => b.textContent.trim() === 'Sign out');
