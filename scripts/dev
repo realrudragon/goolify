@@ -18,7 +18,29 @@ cd "$(dirname "$0")/.."
 COMPOSE_FILE="compose.yml"
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \?//'
+  cat <<'USAGE'
+Goolify server management
+
+Usage: sudo goolify <command> [service...]
+
+  update             Pull the latest code and rebuild the stack
+  status             Show containers and their status
+  logs [service...]  Follow recent logs (for example: logs worker)
+  restart [service...] Restart containers
+  start              Start or rebuild the stack
+  stop               Stop containers and keep their data
+  down               Remove containers and keep volumes by default
+  creds              Show the URL and initial login details saved by the installer
+  cli [args...]      Run an administrative command
+  help               Show this help
+
+The upgrade command is an alias for update.
+Installed commands work from any directory.
+
+Examples:
+  sudo goolify update
+  sudo goolify logs worker
+USAGE
 }
 
 compose() {
@@ -45,16 +67,13 @@ case "$cmd" in
     ;;
   start | up)
     compose up -d --build "$@"
-    app_url="${APP_URL:-http://localhost:${APP_PORT:-8000}}"
-    root_email="${ROOT_USER_EMAIL:-admin@coolify.local}"
-    root_pass="${ROOT_USER_PASSWORD:-CoolifyAdmin123!}"
     echo ""
-    echo "Coolify Standalone is starting up!"
-    echo "  URL:      ${app_url}"
-    echo "  Email:    ${root_email}"
-    echo "  Password: ${root_pass}"
+    echo "Goolify containers started."
+    echo "Installed server commands:"
+    echo "  sudo goolify status             # Check service status"
+    echo "  sudo goolify logs controlplane  # Follow startup logs"
+    echo "  sudo goolify creds              # Show saved initial login details"
     echo ""
-    echo "Tip: Run './scripts/dev logs controlplane' to watch startup progress."
     ;;
   stop)
     compose stop "$@"

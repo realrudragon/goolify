@@ -57,6 +57,23 @@ curl -fsSL https://raw.githubusercontent.com/realrudragon/goolify/main/scripts/i
 
 Review [scripts/install.sh](./scripts/install.sh) before running. After installation, manage the instance anywhere with `goolify status`, `goolify logs`, `goolify restart`, or `sudo goolify update`. The existing `goolify upgrade` command remains an alias for the same update flow.
 
+The installer registers `/usr/local/bin/goolify`, so users can run these commands
+from any directory on their server:
+
+| Task | Command |
+| --- | --- |
+| Update code and rebuild | `sudo goolify update` |
+| Check service status | `sudo goolify status` |
+| Follow application logs | `sudo goolify logs controlplane` |
+| Follow worker logs | `sudo goolify logs worker` |
+| Restart services | `sudo goolify restart` |
+| Show the saved URL and initial login details | `sudo goolify creds` |
+| List commands | `goolify help` |
+
+Updates stop if Git cannot pull or the build fails. The normal update flow keeps
+the existing `.env` and data volumes. The values shown by `creds` are the initial
+credentials saved by the installer; a password changed in the web app may differ.
+
 ### Local Development (All OS)
 
 Start the complete Goolify stack (PostgreSQL 16, Redis 7, Go control plane, Go worker, and Rust executor) with zero manual environment setup:

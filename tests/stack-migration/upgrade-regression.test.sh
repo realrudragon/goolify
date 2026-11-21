@@ -56,6 +56,23 @@ for update_command in update upgrade; do
   "$wrapper"
   grep -qx 'compose -f compose.yml ps' "$DOCKER_CALLS"
   test "$("$wrapper" creds)" = 'ROOT_USER_EMAIL=test@example.test'
+  help_output="$("$wrapper" help)"
+  grep -q 'sudo goolify update' <<<"$help_output"
+  if grep -q './scripts/dev' <<<"$help_output"; then
+    printf 'FAIL: installed help should describe the public goolify commands\n' >&2
+    exit 1
+  fi
+  : >"$DOCKER_CALLS"
+  (cd "$test_dir" && "$wrapper" logs worker)
+  grep -qx 'compose -f compose.yml logs -f --tail=100 worker' "$DOCKER_CALLS"
+  "$wrapper" restart worker
+  grep -qx 'compose -f compose.yml restart worker' "$DOCKER_CALLS"
+  "$wrapper" start >"$test_dir/start.log"
+  grep -q 'sudo goolify creds' "$test_dir/start.log"
+  if grep -q 'CoolifyAdmin123!' "$test_dir/start.log"; then
+    printf 'FAIL: start must not print a development password for installed instances\n' >&2
+    exit 1
+  fi
   : >"$DOCKER_CALLS"
   if ! "$wrapper" "$update_command" --no-deps worker >"$test_dir/mode-only.log" 2>&1; then
     cat "$test_dir/mode-only.log" >&2
