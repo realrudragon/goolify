@@ -9,7 +9,7 @@
 #   ./scripts/dev ps|status      # Show service status
 #   ./scripts/dev logs [svc...]  # Follow logs
 #   ./scripts/dev cli <args...>  # Run /usr/local/bin/coolify-cli inside controlplane
-#   ./scripts/dev upgrade       # Pull source and rebuild, stopping on Git errors
+#   ./scripts/dev update|upgrade # Pull source and rebuild, stopping on Git errors
 #   ./scripts/dev creds         # Show credentials saved by the installer
 #
 set -euo pipefail
@@ -34,7 +34,7 @@ case "$cmd" in
   --help | -h | help)
     usage
     ;;
-  upgrade)
+  update | upgrade)
     # Installer chmod changes must not block pulls; content edits still do.
     # This config applies only to this Git invocation, not the repository.
     git -c core.fileMode=false pull --ff-only

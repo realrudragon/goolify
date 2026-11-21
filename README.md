@@ -55,7 +55,7 @@ Install Docker, clone Goolify to `/opt/goolify`, generate a secure `.env` (`APP_
 curl -fsSL https://raw.githubusercontent.com/realrudragon/goolify/main/scripts/install.sh | sudo bash
 ```
 
-Review [scripts/install.sh](./scripts/install.sh) before running. After installation, manage the instance anywhere with `goolify status`, `goolify logs`, `goolify restart`, or `goolify upgrade`.
+Review [scripts/install.sh](./scripts/install.sh) before running. After installation, manage the instance anywhere with `goolify status`, `goolify logs`, `goolify restart`, or `sudo goolify update`. The existing `goolify upgrade` command remains an alias for the same update flow.
 
 ### Local Development (All OS)
 

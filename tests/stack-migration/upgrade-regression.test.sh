@@ -19,7 +19,7 @@ export PATH="$test_dir/bin:$PATH"
 
 prepare() {
   local name="$1"
-  local scenario="$test_dir/$name"
+  local scenario="$test_dir/$update_command-$name"
   mkdir -p "$scenario/author/scripts"
   git init --quiet --bare "$scenario/origin"
   git -C "$scenario/author" init --quiet -b main
@@ -50,40 +50,46 @@ prepare() {
   export DOCKER_CALLS="$scenario/docker-calls"
 }
 
-prepare mode_only
-"$wrapper"
-grep -qx 'compose -f compose.yml ps' "$DOCKER_CALLS"
-test "$("$wrapper" creds)" = 'ROOT_USER_EMAIL=test@example.test'
-: >"$DOCKER_CALLS"
-"$wrapper" upgrade --no-deps worker >"$test_dir/mode-only.log" 2>&1
-test "$(cat "$GOOLIFY_DIR/version")" = updated
-grep -qx 'compose -f compose.yml up -d --build --no-deps worker' "$DOCKER_CALLS"
-test "$(cat "$GOOLIFY_DIR/.env")" = 'ROOT_USER_EMAIL=test@example.test'
-printf 'PASS: permission-only changes permit upgrade and retain environment\n'
+for update_command in update upgrade; do
+  printf 'Testing goolify %s\n' "$update_command"
+  prepare mode_only
+  "$wrapper"
+  grep -qx 'compose -f compose.yml ps' "$DOCKER_CALLS"
+  test "$("$wrapper" creds)" = 'ROOT_USER_EMAIL=test@example.test'
+  : >"$DOCKER_CALLS"
+  if ! "$wrapper" "$update_command" --no-deps worker >"$test_dir/mode-only.log" 2>&1; then
+    cat "$test_dir/mode-only.log" >&2
+    exit 1
+  fi
+  test "$(cat "$GOOLIFY_DIR/version")" = updated
+  grep -qx 'compose -f compose.yml up -d --build --no-deps worker' "$DOCKER_CALLS"
+  test "$(cat "$GOOLIFY_DIR/.env")" = 'ROOT_USER_EMAIL=test@example.test'
+  printf 'PASS: permission-only changes permit upgrade and retain environment\n'
 
-prepare content_change
-printf '\n# Local customization\n' >>"$GOOLIFY_DIR/scripts/dev"
-if "$wrapper" upgrade >"$test_dir/content-change.log" 2>&1; then
-  printf 'FAIL: upgrade succeeded despite a local content conflict\n' >&2
-  exit 1
-fi
-test ! -e "$DOCKER_CALLS"
-grep -q 'Local customization' "$GOOLIFY_DIR/scripts/dev"
-test "$(cat "$GOOLIFY_DIR/version")" = initial
-printf 'PASS: content conflicts abort before container rebuild\n'
+  prepare content_change
+  printf '\n# Local customization\n' >>"$GOOLIFY_DIR/scripts/dev"
+  if "$wrapper" "$update_command" >"$test_dir/content-change.log" 2>&1; then
+    printf 'FAIL: upgrade succeeded despite a local content conflict\n' >&2
+    exit 1
+  fi
+  test ! -e "$DOCKER_CALLS"
+  grep -q 'Local customization' "$GOOLIFY_DIR/scripts/dev"
+  test "$(cat "$GOOLIFY_DIR/version")" = initial
+  printf 'PASS: content conflicts abort before container rebuild\n'
 
-prepare fetch_failure
-git -C "$GOOLIFY_DIR" remote set-url origin "$test_dir/nonexistent-origin"
-if "$wrapper" upgrade >"$test_dir/fetch-failure.log" 2>&1; then
-  printf 'FAIL: upgrade succeeded despite an unreachable origin\n' >&2
-  exit 1
-fi
-test ! -e "$DOCKER_CALLS"
-test "$(cat "$GOOLIFY_DIR/version")" = initial
-printf 'PASS: failed fetch aborts before container rebuild\n'
+  prepare fetch_failure
+  git -C "$GOOLIFY_DIR" remote set-url origin "$test_dir/nonexistent-origin"
+  if "$wrapper" "$update_command" >"$test_dir/fetch-failure.log" 2>&1; then
+    printf 'FAIL: upgrade succeeded despite an unreachable origin\n' >&2
+    exit 1
+  fi
+  test ! -e "$DOCKER_CALLS"
+  test "$(cat "$GOOLIFY_DIR/version")" = initial
+  printf 'PASS: failed fetch aborts before container rebuild\n'
 
-prepare build_failure
-status=0
-DOCKER_EXIT_CODE=42 "$wrapper" upgrade >"$test_dir/build-failure.log" 2>&1 || status=$?
-test "$status" = 42
-printf 'PASS: failed container build propagates its exit status\n'
+  prepare build_failure
+  status=0
+  DOCKER_EXIT_CODE=42 "$wrapper" "$update_command" >"$test_dir/build-failure.log" 2>&1 || status=$?
+  test "$status" = 42
+  printf 'PASS: failed container build propagates its exit status\n'
+done

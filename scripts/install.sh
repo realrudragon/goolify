@@ -268,7 +268,7 @@ echo "  Useful commands:"
 echo "    goolify status                 # Check container health"
 echo "    goolify logs                   # Follow logs"
 echo "    goolify restart                # Restart stack"
-echo "    goolify upgrade                # Pull latest & rebuild"
+echo "    goolify update                 # Pull latest & rebuild (upgrade also works)"
 echo "    goolify cli --help             # Run internal admin CLI"
 echo ""
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "Status: active"; then
