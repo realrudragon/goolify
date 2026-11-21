@@ -46,6 +46,9 @@ services:
       context: ../..
       dockerfile: docker/stack-migration/Dockerfile
     entrypoint: ["/usr/local/bin/coolify-worker"]
+    # The worker has no HTTP listener; do not inherit the control-plane probe.
+    healthcheck:
+      disable: true
     command: ["-executor-bin", "/usr/local/bin/coolify-executor", "-server-concurrency", "4"]
     environment:
       DATABASE_URL: postgres://coolify:${DB_PASSWORD:-coolify-dev-secret}@postgres:5432/coolify?sslmode=disable

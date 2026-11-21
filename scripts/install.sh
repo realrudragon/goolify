@@ -159,8 +159,8 @@ EOF
 if [[ -d "${GOOLIFY_DIR}/.git" ]]; then
   log_ok "Existing checkout found at ${GOOLIFY_DIR} — updating..."
   run_git -C "$GOOLIFY_DIR" fetch --depth=1 origin "$GOOLIFY_BRANCH"
-  run_git -C "$GOOLIFY_DIR" checkout -q "$GOOLIFY_BRANCH"
-  run_git -C "$GOOLIFY_DIR" merge --ff-only "origin/${GOOLIFY_BRANCH}"
+  run_git -c core.fileMode=false -C "$GOOLIFY_DIR" checkout -q "$GOOLIFY_BRANCH"
+  run_git -c core.fileMode=false -C "$GOOLIFY_DIR" merge --ff-only "origin/${GOOLIFY_BRANCH}"
 else
   mkdir -p "$(dirname "$GOOLIFY_DIR")"
   run_git clone --depth=1 --branch "$GOOLIFY_BRANCH" "$REPO_URL" "$GOOLIFY_DIR"
@@ -243,19 +243,7 @@ cat >/usr/local/bin/goolify <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "${GOOLIFY_DIR}"
-case "\${1:-status}" in
-  upgrade)
-    shift || true
-    git pull --ff-only && chmod +x ./scripts/dev ./scripts/install.sh 2>/dev/null || true
-    docker compose -f compose.yml up -d --build "\$@"
-    ;;
-  creds | info)
-    grep -E '^(APP_URL|ROOT_USER_EMAIL|ROOT_USER_PASSWORD)=' "${ENV_FILE}" || true
-    ;;
-  *)
-    exec bash ./scripts/dev "\$@"
-    ;;
-esac
+exec bash ./scripts/dev "\${@:-status}"
 EOF
 chmod +x /usr/local/bin/goolify
 log_ok "Installed global helper command: /usr/local/bin/goolify"

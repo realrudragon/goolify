@@ -9,6 +9,8 @@
 #   ./scripts/dev ps|status      # Show service status
 #   ./scripts/dev logs [svc...]  # Follow logs
 #   ./scripts/dev cli <args...>  # Run /usr/local/bin/coolify-cli inside controlplane
+#   ./scripts/dev upgrade       # Pull source and rebuild, stopping on Git errors
+#   ./scripts/dev creds         # Show credentials saved by the installer
 #
 set -euo pipefail
 
@@ -16,7 +18,7 @@ cd "$(dirname "$0")/.."
 COMPOSE_FILE="compose.yml"
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \?//'
+  sed -n '2,14p' "$0" | sed 's/^# \?//'
 }
 
 compose() {
@@ -31,6 +33,15 @@ fi
 case "$cmd" in
   --help | -h | help)
     usage
+    ;;
+  upgrade)
+    # Installer chmod changes must not block pulls; content edits still do.
+    # This config applies only to this Git invocation, not the repository.
+    git -c core.fileMode=false pull --ff-only
+    compose up -d --build "$@"
+    ;;
+  creds | info)
+    grep -E '^(APP_URL|ROOT_USER_EMAIL|ROOT_USER_PASSWORD)=' .env || true
     ;;
   start | up)
     compose up -d --build "$@"
