@@ -125,6 +125,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
   let serverProc;
   let chromeProc;
   let cdp;
+  let applicationDeepLink;
 
   before(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'coolify-e2e-'));
@@ -214,6 +215,22 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     cdp = new CDPClient(ws);
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.__realtimeURLs = [];
+      window.__apiURLs = [];
+      const originalFetch = window.fetch;
+      window.fetch = function(input, config) {
+        window.__apiURLs.push(input instanceof Request ? input.url : String(input));
+        return originalFetch.call(this, input, config);
+      };
+      const OriginalEventSource = window.EventSource;
+      window.EventSource = class extends OriginalEventSource {
+        constructor(url, config) {
+          super(url, config);
+          window.__realtimeURLs.push(String(url));
+        }
+      };
+    ` });
   });
 
   after(() => {
@@ -229,6 +246,10 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const text = await cdp.eval('document.body.innerText');
     assert.equal(text.includes('Managed Servers'), false, 'unauthenticated /login must NOT render dashboard widgets');
     await cdp.screenshot('01-login.png');
+    const loginLayout = await cdp.eval(`({ width: document.querySelector('form').getBoundingClientRect().width, emailLabel: document.querySelector('label[for="login-email"]')?.textContent?.trim(), passwordLabel: document.querySelector('label[for="login-password"]')?.textContent?.trim() })`);
+    assert.equal(loginLayout.emailLabel, 'Email');
+    assert.equal(loginLayout.passwordLabel, 'Password');
+    assert.equal(loginLayout.width, 432);
   });
 
   it('logs in via UI form, sets HttpOnly session + CSRF cookie, hydrates dashboard, and persists created Server + Project across full reload', async () => {
@@ -285,10 +306,12 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const bodyTeam20 = await cdp.eval('document.body.innerText');
     assert.equal(bodyTeam20.includes('edge-node-1'), false, 'Team 0 server leaked after switching to Team 20');
     assert.equal(bodyTeam20.includes('Browser E2E Project'), false, 'Team 0 project leaked after switching to Team 20');
+    await cdp.waitFor(`window.__realtimeURLs.filter(url => url.startsWith('/realtime/events?')).at(-1) === '/realtime/events?channel=team.20'`);
 
     // Switch back to Team 0
     await cdp.eval(`document.querySelector('[data-testid="switch-team-0"]').click()`);
     await cdp.waitFor(`document.querySelector('[data-testid="active-team-id"]')?.textContent?.includes('0') && document.body.innerText.includes('edge-node-1')`);
+    await cdp.waitFor(`window.__realtimeURLs.filter(url => url.startsWith('/realtime/events?')).at(-1) === '/realtime/events?channel=team.0'`);
   });
 
   it('streams SSE logs XSS-safely and executes live commands over WebSocket terminal', async () => {
@@ -396,6 +419,15 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
       document.querySelector('[data-testid="create-app-btn"]').click();
     })()`);
     await cdp.waitFor(`document.body.innerText.includes('Application created: browser-live-app')`);
+    applicationDeepLink = await cdp.eval(`(async () => {
+      const apps = await fetch('/api/v1/applications').then(res => res.json());
+      const app = apps.find(app => app.name === 'browser-live-app');
+      return {
+        uuid: app.uuid,
+        project: document.querySelector('[data-testid="resources-manager"] select[aria-label="Project"]').value,
+        environment: document.querySelector('[data-testid="resources-manager"] select[aria-label="Environment"]').value,
+      };
+    })()`);
 
     // 3. Databases & Backups: create real PostgreSQL DB + real Backup Schedule shown in ScheduleList (zero hardcoded rows!)
     await cdp.eval(`document.querySelector('[data-testid="tab-databases"]').click()`);
@@ -451,9 +483,60 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     assert.ok(api404.ct.includes('application/json'), `expected JSON 404 on unknown /api/v1, got ${api404.ct}`);
   });
 
-  it('logs out via Sign out button, revokes PostgreSQL session, and returns 401 on subsequent /app/auth/me', async () => {
+  it('opens an original application deep link after reload and loads that resource and environment', async () => {
+    const { uuid, project, environment } = applicationDeepLink;
+    const url = `${BASE_URL}/project/${project}/environment/${environment}/application/${uuid}/environment-variables`;
+    await cdp.send('Page.navigate', { url });
+    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs') && document.querySelector('[data-testid="resources-manager"] select[aria-label="Environment"]')?.value === '${environment}'`);
+    assert.equal(await cdp.eval(`document.querySelector('[data-testid="resources-manager"] select[aria-label="Project"]').value`), project);
+    await cdp.send('Page.reload');
+    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs')`);
+  });
+
+  it('preserves navigation, theme and mobile layout using the original Coolify shell dimensions', async () => {
+    await cdp.send('Page.navigate', { url: `${BASE_URL}/servers` });
+    await cdp.waitFor(`document.querySelector('[data-testid="tab-servers"][aria-selected="true"]') !== null`);
+    const desktop = await cdp.eval(`(() => {
+      const sidebar = document.querySelector('[data-testid="app-sidebar"]');
+      const header = document.querySelector('[data-testid="app-topbar"]');
+      return { sidebar: sidebar?.getBoundingClientRect().width, header: header?.getBoundingClientRect().height,
+        active: document.querySelector('nav[aria-label="Primary navigation"] a[aria-current="page"]')?.getAttribute('href') };
+    })()`);
+    assert.equal(desktop.sidebar, 224);
+    assert.equal(desktop.header, 48);
+    assert.equal(desktop.active, '/servers');
+    await cdp.eval(`document.querySelector('[data-testid="sidebar-collapse"]').click()`);
+    await cdp.waitFor(`document.querySelector('[data-testid="app-sidebar"]').getBoundingClientRect().width === 64`);
+    await cdp.send('Page.reload');
+    await cdp.waitFor(`document.querySelector('[data-testid="app-sidebar"]')?.getBoundingClientRect().width === 64`);
+    await cdp.eval(`document.querySelector('[data-testid="theme-toggle"]').click()`);
+    await cdp.waitFor(`!document.documentElement.classList.contains('dark')`);
+    await cdp.send('Page.reload');
+    await cdp.waitFor(`!document.documentElement.classList.contains('dark')`);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await cdp.waitFor(`getComputedStyle(document.querySelector('[data-testid="mobile-menu-toggle"]')).display !== 'none'`);
+    assert.equal(await cdp.eval(`document.documentElement.scrollWidth <= window.innerWidth`), true, 'mobile shell must not overflow');
+    const mobileBounds = await cdp.eval(`({ width: window.innerWidth, x: window.scrollX, main: document.querySelector('main').getBoundingClientRect().left, viewport: window.visualViewport.width, offset: window.visualViewport.offsetLeft, overflow: [...document.querySelectorAll('main *')].map(el => ({tag: el.tagName, cls: el.className, style: el.getAttribute('style'), right: el.getBoundingClientRect().right})).filter(el => el.right > 391).slice(0, 12) })`);
+    assert.equal(mobileBounds.width, 390, JSON.stringify(mobileBounds));
+    assert.equal(mobileBounds.x, 0, JSON.stringify(mobileBounds));
+    assert.equal(mobileBounds.main, 0, JSON.stringify(mobileBounds));
+    assert.equal(mobileBounds.offset, 0, JSON.stringify(mobileBounds));
+    await cdp.eval(`document.querySelector('[data-testid="mobile-menu-toggle"]').click()`);
+    await cdp.waitFor(`document.querySelector('[data-testid="mobile-menu"]').open`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.waitFor(`!document.querySelector('[data-testid="mobile-menu"]').open`);
+    await cdp.screenshot('06-mobile-shell.png');
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await cdp.eval(`document.querySelector('[data-testid="theme-toggle"]').click()`);
+    await cdp.eval(`document.querySelector('[data-testid="sidebar-collapse"]').click()`);
+  });
+
+  it('logs out from mobile navigation, revokes PostgreSQL session, and returns 401 on subsequent /app/auth/me', async () => {
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await cdp.eval(`document.querySelector('[data-testid="mobile-menu-toggle"]').click()`);
+    await cdp.waitFor(`document.querySelector('[data-testid="mobile-menu"]').open && document.querySelector('[data-testid="mobile-menu"] button.coolify-btn') !== null`);
     await cdp.eval(`(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
+      const btns = Array.from(document.querySelectorAll('[data-testid="mobile-menu"] button'));
       const signOut = btns.find((b) => b.textContent.trim() === 'Sign out');
       if (!signOut) throw new Error('Sign out button not found');
       signOut.click();

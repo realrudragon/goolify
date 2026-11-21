@@ -1,0 +1,9 @@
+<script is:inline>
+  (() => {
+    try {
+      const theme = localStorage.getItem('theme');
+      document.documentElement.classList.toggle('dark', theme !== 'light');
+      document.documentElement.dataset.sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true' ? 'true' : 'false';
+    } catch { /* Default dark theme also works when browser storage is unavailable. */ }
+  })();
+</script>

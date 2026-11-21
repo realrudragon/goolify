@@ -1,5 +1,75 @@
 # Coolify Standalone Migration Checkpoint & Verification Ledger
 
+> **2026-11-21 re-audit: full UX/UI and functional parity is NOT established.**
+> The completion claims in the historical checkpoint below describe its earlier
+> tests and inventory counts. They must not be used as evidence that every
+> original page, action, provider integration, or deployment path works identically.
+
+## Re-audit against the original pre-migration implementation (2026-11-21)
+
+The requested reference is the frozen original Coolify commit
+`171eae00a76dff4f5a02c2b5130d7b2dfe219a7d`, not the latest upstream branch.
+That commit was fetched and its original layouts, navbar, auth views, CSS,
+icons and fonts were inspected directly. The current Astro/Vue/Go/Rust stack
+is retained.
+
+### Changes verified in this pass
+
+- Restored the shared 48px desktop header, 224px/64px collapsible sidebar,
+  56px mobile header, native modal navigation drawer, active navigation state,
+  keyboard focus and a mobile sign-out control.
+- Added persistent light/dark theme selection applied before rendering, original
+  Geist fonts and the original outline navigation icons. Custom themes,
+  original navigation submenus and resource-specific menus remain outstanding.
+- Restored the original auth card dimensions and basic visual structure, with
+  explicit input labels, autocomplete and duplicate-submit protection. This
+  does not restore the complete original authentication experience.
+- Fixed application/service/database resource identification from original
+  project/environment URLs. Application deep-link reload and environment
+  selection were exercised against the real control plane. Individual route
+  suffixes still do not have all their original dedicated screens.
+- Replaced the hardcoded root-team realtime subscription with the active session
+  team, reconnecting on team changes and discarding stale subscription setup.
+  The browser test records the actual requested EventSource URL for both teams.
+- Fixed overflow in server forms, server operations and proxy controls. The
+  mobile test now checks the actual 390px layout viewport, rather than only
+  comparing two potentially expanded document widths.
+
+### Fresh verification
+
+| Check | Result | Scope and limitation |
+|---|---|---|
+| `backend: go test -json -count=1 -p 1 ./...` | 70 tests passed; 1 test skipped; 0 failures | Real isolated PostgreSQL 16 and Redis 7; the Go-to-Rust subprocess test requires a host-compatible `COOLIFY_EXECUTOR_BIN` and was skipped |
+| `executor: cargo test --workspace` | 10 tests passed | Executed in the existing Linux Rust toolchain container; this is not a live managed-server deployment |
+| `apps/web: npm run check` and `npm run build` | Passed | Type/build correctness, not original UI equivalence |
+| Node inventory, shell and URL resolver suites | 9 tests passed | Inventory structure, frontend contracts and route parsing |
+| Real Chromium browser suite | 11 tests passed | Login, team switching, realtime subscription selection, CRUD, logs/terminal, tokens, deep links, shell controls and mobile logout |
+| Original-versus-port screenshot comparison | Not run | Current screenshots were inspected, but the original Laravel application was not rendered alongside them |
+| Packaging benchmarks, race detector, live paid providers and blank-server deployment | Not run in this pass | Earlier receipts are historical and were not refreshed |
+
+The existing isolated tests reset their own test schema. They were run against
+new containers on ports 15432/16379, not the other project's PostgreSQL/Redis.
+
+### Remaining gaps and required acceptance evidence
+
+| Area | Confirmed gap or unverified behavior | Owning implementation / required evidence |
+|---|---|---|
+| Navigation and page structure | The original hierarchical submenus, global search, role-dependent visibility and resource navigation are missing; the port still combines multiple screens into workspace panels | `apps/web/src/layouts/AppLayout.astro`, `DashboardRoot.vue`; port original `navbar.blade.php` and each route's screen, then compare desktop/mobile and light/dark states |
+| Authentication UX | Forgot-password, registration status, conditional OAuth/passkey entry points and separate auth challenge screens are not equivalent to the original | `LoginPanel.vue`, `v1_slice13_web_canvas.go`; exercise each original auth journey, including provider failure and challenge recovery |
+| Password recovery | The handler prepares a one-time token and returns a success message, but that handler contains no email dispatch | `handleForgotPassword`; prove email delivery and completion of a password reset, not only token insertion |
+| OAuth | The generic implementation uses an illustrative `.example` authorization fallback and a custom `/userinfo?code=` request rather than a demonstrated provider-specific authorization-code exchange | `handleOAuthFlow`; verify the configured real providers' complete flows before claiming support |
+| Application creation | The form still submits a fixed Dockerfile and `nginx:alpine` image settings without controls for configuring those values | `ResourcesManager.vue:createApp`; add type-specific fields and assert the user's submitted values persist and are used by deployment |
+| Fresh deployments | The inspected planner/worker commands do not show creation of the compose file required by their `docker compose up` commands; this pass did not execute a first deployment on a blank managed host | `deployments/planner.go`, `worker/runner.go`; run each build pack on an isolated blank SSH host and verify running containers, configuration, envs, volumes, proxy and rollback |
+| Async team/project switching | Most panels still have only lifetime abort signals. Resetting UI data does not establish that delayed earlier-team/project responses cannot repopulate it | `ResourcesManager.vue` and sibling loaders; add delayed-response browser tests and discard stale results throughout the affected panels |
+| All-function coverage | The ledgers contain 631 route rows, 718 feature rows and 81 data rows, but generic `Task coverage for ...` strings do not identify an executable acceptance test for every original action | `migration/*.csv`, `tests/stack-migration/inventory.test.ts`; map original actions, inputs, permissions, effects and error cases to concrete differential tests |
+
+These are the verified gaps and limits of this pass, not an exhaustive list of
+all differences. No percentage of semantic or visual parity is assigned.
+
+---
+
+## Historical migration checkpoint (retained for provenance)
+
 **Workspace:** `c:\WorkSpace\coolify-golang`  
 **Frozen Baseline SHA:** `171eae00a76dff4f5a02c2b5130d7b2dfe219a7d`  
 **Target Stack:** Standalone Astro + Vue 3.5 (`vue@^3.5.45` with `@astrojs/vue@^7.1.6`) + TypeScript + Go (`1.26.5`) + Rust (`coolify-executor`)  

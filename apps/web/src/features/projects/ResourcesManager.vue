@@ -25,6 +25,7 @@ const emit = defineEmits<{
   selectApp: [uuid: string];
   selectService: [uuid: string];
 }>();
+const props = defineProps<{ initialProjectUuid?: string; initialEnvironmentUuid?: string }>();
 
 const lifecycle = usePageLifecycle();
 const apps = ref<ResourceSummary[]>([]);
@@ -34,8 +35,8 @@ const envs = ref<Array<{ uuid: string; name: string }>>([]);
 const servers = ref<Array<{ uuid: string; name: string }>>([]);
 const templates = ref<ServiceTemplateOption[]>([]);
 
-const selectedProjectUuid = ref('');
-const selectedEnvUuid = ref('');
+const selectedProjectUuid = ref(props.initialProjectUuid ?? '');
+const selectedEnvUuid = ref(props.initialEnvironmentUuid ?? '');
 const selectedServerUuid = ref('localhost');
 
 const appName = ref('');
@@ -64,7 +65,9 @@ async function loadAll() {
     projects.value = projList;
     servers.value = srvList;
     templates.value = tplList;
-    if (!selectedProjectUuid.value && projList.length > 0) {
+    if (selectedProjectUuid.value) {
+      await loadEnvs(selectedProjectUuid.value);
+    } else if (projList.length > 0) {
       selectedProjectUuid.value = projList[0].uuid;
       await loadEnvs(projList[0].uuid);
     }
@@ -88,7 +91,7 @@ async function loadEnvs(projUuid: string) {
       `/api/v1/projects/${encodeURIComponent(projUuid)}/environments`,
       { signal: lifecycle.signal },
     );
-    selectedEnvUuid.value = envs.value[0]?.uuid ?? '';
+    if (!envs.value.some(env => env.uuid === selectedEnvUuid.value)) selectedEnvUuid.value = envs.value[0]?.uuid ?? '';
   } catch {
     envs.value = [];
     selectedEnvUuid.value = '';
@@ -222,6 +225,10 @@ watch(selectedProjectUuid, (u) => {
 lifecycle.onTeamSwitch(() => {
   apps.value = [];
   services.value = [];
+  projects.value = [];
+  envs.value = [];
+  selectedProjectUuid.value = '';
+  selectedEnvUuid.value = '';
   status.value = '';
   void loadAll();
 });

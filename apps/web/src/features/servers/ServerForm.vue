@@ -75,7 +75,7 @@ onMounted(() => {
       <strong>Add Server</strong>
       <input v-model="name" class="coolify-input" placeholder="Server Name" aria-label="Server Name" required />
       <input v-model="ip" class="coolify-input" placeholder="IP / Hostname" aria-label="IP / Hostname" required />
-      <div style="display:flex;gap:8px;">
+      <div class="coolify-input-row">
         <input v-model.number="port" type="number" class="coolify-input" placeholder="Port" aria-label="SSH Port" />
         <input v-model="user" class="coolify-input" placeholder="SSH User" aria-label="SSH User" />
       </div>

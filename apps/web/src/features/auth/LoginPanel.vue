@@ -9,12 +9,15 @@ const email = ref('');
 const password = ref('');
 const totpCode = ref('');
 const error = ref('');
+const busy = ref(false);
 
 onMounted(() => {
   hydrated.value = true;
 });
 
 async function login() {
+  if (busy.value) return;
+  busy.value = true;
   error.value = '';
   try {
     await apiRequest('/app/auth/login', {
@@ -29,24 +32,37 @@ async function login() {
     window.location.assign('/');
   } catch (err) {
     error.value = (err as Error).message || 'Authentication failed';
+  } finally {
+    busy.value = false;
   }
 }
 </script>
 
 <template>
   <form
-    class="coolify-card"
-    style="max-width:380px;margin:60px auto;"
+    class="auth-card"
     :data-hydrated="hydrated ? 'true' : 'false'"
     @submit.prevent="login"
   >
-    <div class="coolify-well" style="display:grid;gap:10px;">
-      <strong>Sign in to Goolify</strong>
-      <input v-model="email" type="email" class="coolify-input" placeholder="Email" required />
-      <input v-model="password" type="password" class="coolify-input" placeholder="Password" required />
-      <input v-model="totpCode" class="coolify-input" placeholder="2FA Code (optional)" />
-      <button type="submit" class="coolify-btn coolify-btn-primary">Login</button>
-      <p v-if="error" role="alert">{{ error }}</p>
+    <div class="auth-card-heading">
+      <h1>Sign in to Goolify</h1>
+      <p>Sign in to manage your applications and infrastructure.</p>
+    </div>
+    <div class="auth-card-body">
+      <p v-if="error" role="alert" class="auth-alert">{{ error }}</p>
+      <div class="auth-field">
+        <label for="login-email">Email</label>
+        <input id="login-email" v-model="email" name="email" type="email" autocomplete="email" class="coolify-input" placeholder="Email" required autofocus />
+      </div>
+      <div class="auth-field">
+        <label for="login-password">Password</label>
+        <input id="login-password" v-model="password" name="password" type="password" autocomplete="current-password" class="coolify-input" placeholder="Password" required />
+      </div>
+      <div class="auth-field">
+        <label for="login-totp">Two-factor authentication code <span class="auth-optional">(if enabled)</span></label>
+        <input id="login-totp" v-model="totpCode" name="code" autocomplete="one-time-code" inputmode="numeric" class="coolify-input" placeholder="2FA Code (optional)" />
+      </div>
+      <button type="submit" class="coolify-btn coolify-btn-primary auth-submit" :disabled="busy">{{ busy ? 'Signing in...' : 'Login' }}</button>
     </div>
   </form>
 </template>

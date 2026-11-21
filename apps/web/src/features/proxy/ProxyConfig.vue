@@ -27,7 +27,7 @@ async function loadProxy() {
 <template>
   <div class="coolify-card">
     <div class="coolify-well" style="display:grid;gap:8px;">
-      <div style="display:flex;align-items:center;gap:10px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
         <strong>Reverse Proxy</strong>
         <select v-model="proxyType" class="coolify-input" aria-label="Proxy Type">
           <option value="traefik">Traefik</option>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { apiRequest } from '../../lib/api';
+import { resolveUIRoute } from '../../lib/ui-route';
+import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 import ServerList from '../servers/ServerList.vue';
 import ServerSummary from '../servers/ServerSummary.vue';
 import ServerForm from '../servers/ServerForm.vue';
@@ -35,6 +37,10 @@ const activeApplicationUuid = ref('');
 const activeServiceUuid = ref('');
 const activeDatabaseUuid = ref('coolify-db');
 const activeDatabaseType = ref('postgresql');
+const routeProjectUuid = ref('');
+const routeEnvironmentUuid = ref('');
+const lifecycle = usePageLifecycle();
+const realtimeStatus = ref('Connecting to realtime updates…');
 
 const serverListRef = ref<InstanceType<typeof ServerList> | null>(null);
 const scheduleListRef = ref<InstanceType<typeof ScheduleList> | null>(null);
@@ -47,12 +53,22 @@ const helpSubject = ref('');
 const helpDescription = ref('');
 const helpStatus = ref('');
 let eventStream: EventSource | null = null;
+let realtimeGeneration = 0;
 
-function subscribeRealtimeToasts() {
+async function subscribeRealtimeToasts(teamId?: number) {
   if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+  const generation = ++realtimeGeneration;
+  eventStream?.close();
+  eventStream = null;
+  realtimeStatus.value = 'Connecting to realtime updates…';
   try {
-    eventStream = new EventSource('/realtime/events?channel=team.0');
+    const activeTeamId = teamId ?? (await apiRequest<{ session_team_id: number }>('/app/auth/me', { signal: lifecycle.signal })).session_team_id;
+    if (generation !== realtimeGeneration || lifecycle.signal.aborted) return;
+    eventStream = new EventSource(`/realtime/events?channel=team.${activeTeamId}`);
+    eventStream.onopen = () => { realtimeStatus.value = 'Realtime channel active'; };
+    eventStream.onerror = () => { realtimeStatus.value = 'Reconnecting to realtime updates…'; };
     eventStream.onmessage = (ev) => {
+      if (generation !== realtimeGeneration) return;
       try {
         const msg = JSON.parse(ev.data) as { mutation_type?: string; resource_uuid?: string };
         if (msg.mutation_type) {
@@ -63,7 +79,9 @@ function subscribeRealtimeToasts() {
       }
     };
   } catch {
+    if (generation !== realtimeGeneration) return;
     eventStream = null;
+    realtimeStatus.value = 'Realtime updates unavailable';
   }
 }
 
@@ -88,42 +106,26 @@ async function submitHelpFeedback() {
 
 function resolveTabFromPath() {
   if (typeof window === 'undefined') return;
-  const p = window.location.pathname;
-  if (p.startsWith('/servers') || p.startsWith('/server/') || p.startsWith('/destinations') || p.startsWith('/destination/')) {
-    activeTab.value = 'servers';
-    const match = p.match(/^\/server\/([^/]+)/);
-    if (match?.[1]) {
-      activeServerUuid.value = decodeURIComponent(match[1]);
-      activeResourceUuid.value = activeServerUuid.value;
-    }
-  } else if (p.startsWith('/projects') || p.startsWith('/project/') || p.startsWith('/services') || p.startsWith('/deployments')) {
-    activeTab.value = 'projects';
-  } else if (p.startsWith('/databases') || p.startsWith('/storages')) {
-    activeTab.value = 'databases';
-  } else if (p.startsWith('/terminal') || p.startsWith('/metrics') || p.startsWith('/analytics')) {
-    activeTab.value = 'operations';
-  } else if (p.startsWith('/sources') || p.startsWith('/source/') || p.startsWith('/security/cloud') || p.startsWith('/security/integration')) {
-    activeTab.value = 'sources';
-  } else if (p.startsWith('/vulnerabilities') || p.startsWith('/security')) {
-    activeTab.value = 'security';
-  } else if (
-    p.startsWith('/teams') ||
-    p.startsWith('/team') ||
-    p.startsWith('/settings') ||
-    p.startsWith('/notifications') ||
-    p.startsWith('/profile') ||
-    p.startsWith('/transfers') ||
-    p.startsWith('/shared-variables') ||
-    p.startsWith('/tags') ||
-    p.startsWith('/subscription') ||
-    p.startsWith('/admin') ||
-    p.startsWith('/onboarding')
-  ) {
-    activeTab.value = 'settings';
-  } else {
-    activeTab.value = 'overview';
-  }
+  const route = resolveUIRoute(window.location.pathname);
+  activeTab.value = route.section;
+  routeProjectUuid.value = route.projectUuid ?? '';
+  routeEnvironmentUuid.value = route.environmentUuid ?? '';
+  if (route.serverUuid) activeServerUuid.value = route.serverUuid;
+  activeApplicationUuid.value = route.applicationUuid ?? '';
+  activeServiceUuid.value = route.serviceUuid ?? '';
+  if (route.databaseUuid) activeDatabaseUuid.value = route.databaseUuid;
+  activeResourceUuid.value = route.applicationUuid ?? route.serviceUuid ?? route.databaseUuid ?? activeServerUuid.value;
 }
+
+lifecycle.onTeamSwitch((teamId) => {
+  realtimeToast.value = '';
+  activeApplicationUuid.value = '';
+  activeServiceUuid.value = '';
+  activeResourceUuid.value = '';
+  routeProjectUuid.value = '';
+  routeEnvironmentUuid.value = '';
+  void subscribeRealtimeToasts(teamId);
+});
 
 function handleServerCreated(uuid: string) {
   activeServerUuid.value = uuid;
@@ -148,6 +150,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  realtimeGeneration++;
   if (eventStream) {
     eventStream.close();
     eventStream = null;
@@ -163,7 +166,7 @@ onBeforeUnmount(() => {
       <p v-if="realtimeToast" role="status" data-testid="realtime-toast" style="margin:0;font-size:13px;">
         {{ realtimeToast }}
       </p>
-      <span v-else style="font-size:12px;color:var(--ui-fg-faint);">Realtime channel active</span>
+      <span v-else role="status" style="font-size:12px;color:var(--ui-fg-faint);">{{ realtimeStatus }}</span>
       <button type="button" class="coolify-btn" data-testid="help-toggle-btn" @click="showHelp = !showHelp">
         {{ showHelp ? 'Close Help' : 'Help & Feedback' }}
       </button>
@@ -204,11 +207,11 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-if="activeTab === 'overview'">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="coolify-two-column">
         <ServerList ref="serverListRef" @select="handleServerSelected" />
         <ServerSummary :server-uuid="activeServerUuid" />
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="coolify-two-column">
         <ServerForm @created="handleServerCreated" />
         <ProjectExplorer @select="resourcesManagerRef?.refresh()" />
       </div>
@@ -216,11 +219,11 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else-if="activeTab === 'servers'">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="coolify-two-column">
         <ServerList ref="serverListRef" @select="handleServerSelected" />
         <ServerForm @created="handleServerCreated" />
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div class="coolify-two-column">
         <ServerSummary :server-uuid="activeServerUuid" />
         <ServerSettings :server-uuid="activeServerUuid" />
       </div>
@@ -232,6 +235,8 @@ onBeforeUnmount(() => {
       <ProjectExplorer @select="resourcesManagerRef?.refresh()" />
       <ResourcesManager
         ref="resourcesManagerRef"
+        :initial-project-uuid="routeProjectUuid"
+        :initial-environment-uuid="routeEnvironmentUuid"
         @select-app="(u) => { activeApplicationUuid = u; activeResourceUuid = u; }"
         @select-service="(u) => { activeServiceUuid = u; activeResourceUuid = u; }"
       />

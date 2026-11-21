@@ -187,9 +187,9 @@ onMounted(() => {
 <template>
   <div class="coolify-card" data-testid="server-ops-panel">
     <div class="coolify-well" style="display:grid;gap:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;">
         <strong>Server Operations ({{ serverUuid }})</strong>
-        <div style="display:flex;gap:6px;">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
           <button type="button" class="coolify-btn" @click="triggerCleanup">Run Docker Cleanup</button>
           <button type="button" class="coolify-btn" @click="runHostScan">Record Host Scan</button>
           <button type="button" class="coolify-btn" @click="loadAll">Refresh</button>
@@ -205,11 +205,11 @@ onMounted(() => {
         <button type="submit" class="coolify-btn coolify-btn-primary">Save Subsystems</button>
       </form>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="coolify-two-column">
         <form style="display:grid;gap:6px;" @submit.prevent="addRegistry">
           <strong style="font-size:13px;">Container Registries ({{ registries.length }})</strong>
           <input v-model="newRegistry" class="coolify-input" placeholder="ghcr.io" required />
-          <div style="display:flex;gap:6px;">
+          <div class="coolify-input-row">
             <input v-model="newRegUser" class="coolify-input" placeholder="Username" />
             <input v-model="newRegPass" type="password" class="coolify-input" placeholder="Password" />
             <button type="submit" class="coolify-btn">Add</button>
@@ -218,7 +218,7 @@ onMounted(() => {
 
         <form style="display:grid;gap:6px;" @submit.prevent="addSwarm">
           <strong style="font-size:13px;">Swarm Destinations ({{ swarmDockers.length }}) &amp; Runners</strong>
-          <div style="display:flex;gap:6px;">
+          <div class="coolify-input-row">
             <input v-model="swarmName" class="coolify-input" placeholder="Swarm cluster name" required />
             <button type="submit" class="coolify-btn">Add Swarm</button>
           </div>
