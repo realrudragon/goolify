@@ -14,12 +14,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coollabsio/coolify/backend/internal/access"
 	"github.com/coollabsio/coolify/backend/internal/auth"
+	"github.com/coollabsio/coolify/backend/internal/domains/ops"
 	"github.com/jackc/pgx/v5"
 )
+
+var localMetricsCollectMu sync.Mutex
 
 func (a *App) registerSlice13Routes() {
 	// Session-authenticated Canvas API (/canvas/api/*)
@@ -121,8 +125,51 @@ func (a *App) handleCanvasAPI(w http.ResponseWriter, r *http.Request, p auth.Pri
 		}
 		if len(parts) == 4 && parts[3] == "usage" {
 			var cpu, mem, disk float64
-			_ = a.Pool.QueryRow(r.Context(), `SELECT cpu_percent, memory_percent, disk_percent FROM go_server_metrics WHERE server_id = $1 ORDER BY id DESC LIMIT 1`, m.ID).Scan(&cpu, &mem, &disk)
-			writeJSON(w, http.StatusOK, map[string]any{"server_uuid": m.UUID, "cpu_percent": cpu, "memory_percent": mem, "disk_percent": disk})
+			var recordedAt time.Time
+			hasMetrics := a.Pool.QueryRow(r.Context(), `
+				SELECT cpu_percent, memory_percent, disk_percent, recorded_at
+				FROM go_server_metrics
+				WHERE server_id = $1
+				ORDER BY id DESC
+				LIMIT 1
+			`, m.ID).Scan(&cpu, &mem, &disk, &recordedAt) == nil
+
+			// For localhost (id=0), sample live host metrics on-demand when no sample exists yet or the latest is stale.
+			if m.ID == 0 && (!hasMetrics || time.Since(recordedAt) > 30*time.Second) {
+				localMetricsCollectMu.Lock()
+				// Re-check in case another concurrent request just populated a fresh sample.
+				var freshAt time.Time
+				if a.Pool.QueryRow(r.Context(), `
+					SELECT cpu_percent, memory_percent, disk_percent, recorded_at
+					FROM go_server_metrics
+					WHERE server_id = $1
+					ORDER BY id DESC
+					LIMIT 1
+				`, m.ID).Scan(&cpu, &mem, &disk, &freshAt) == nil && time.Since(freshAt) <= 30*time.Second {
+					recordedAt = freshAt
+					hasMetrics = true
+				} else if sample, sErr := ops.CollectLocalHostMetrics(r.Context()); sErr == nil {
+					_ = ops.RecordServerMetrics(r.Context(), a.Pool, m.ID, sample)
+					cpu = sample.CPUPercent
+					mem = sample.MemoryPercent
+					disk = sample.DiskPercent
+					recordedAt = sample.RecordedAt
+					hasMetrics = true
+				}
+				localMetricsCollectMu.Unlock()
+			}
+
+			resp := map[string]any{
+				"server_uuid":    m.UUID,
+				"cpu_percent":    cpu,
+				"memory_percent": mem,
+				"disk_percent":   disk,
+				"has_metrics":    hasMetrics,
+			}
+			if hasMetrics && !recordedAt.IsZero() {
+				resp["recorded_at"] = recordedAt.UTC().Format(time.RFC3339)
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 		if len(parts) == 4 && parts[3] == "containers" {

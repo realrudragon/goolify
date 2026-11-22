@@ -67,6 +67,9 @@ const form = ref<Record<string, any>>({
     name: '',
     git_repository: '',
     git_branch: 'main',
+    build_pack: 'dockerfile',
+    base_directory: '/',
+    publish_directory: '',
     dockerfile: '',
     docker_compose_raw: '',
     docker_registry_image_name: '',
@@ -167,10 +170,10 @@ async function create() {
                                     ? ['private_key_uuid']
                                     : []),
                           ];
-            for (const key of [...fields, 'ports_exposes'])
+            for (const key of [...fields, 'ports_exposes', 'base_directory', 'publish_directory'])
                 if (form.value[key] !== '') payload[key] = form.value[key];
             if (['public', 'private-github-app', 'private-deploy-key'].includes(choice.type))
-                payload.build_pack = 'dockerfile';
+                payload.build_pack = form.value.build_pack || 'dockerfile';
         }
         const created = await apiRequest<{ uuid: string }>(
             `/api/v1/${choice.family}${choice.family === 'services' ? '' : `/${choice.type}`}`,
@@ -352,10 +355,27 @@ onMounted(load);
                                     class="coolify-input"
                                     required /></label
                             ><label class="form-field"
-                                >Build Pack<input
+                                >Build Pack<select
+                                    v-model="form.build_pack"
                                     class="coolify-input"
-                                    value="Dockerfile"
-                                    readonly /></label
+                                >
+                                    <option value="dockerfile">Dockerfile</option>
+                                    <option value="railpack">Railpack</option>
+                                    <option value="dockercompose">Docker Compose</option>
+                                    <option value="static">Static</option>
+                                </select></label
+                            ><label class="form-field"
+                                >Base Directory<input
+                                    v-model="form.base_directory"
+                                    class="coolify-input"
+                                    placeholder="/" /></label
+                            ><label
+                                v-if="form.build_pack === 'static'"
+                                class="form-field"
+                                >Publish Directory<input
+                                    v-model="form.publish_directory"
+                                    class="coolify-input"
+                                    placeholder="/dist" /></label
                             ><label
                                 v-if="selected.type === 'private-deploy-key'"
                                 class="form-field"

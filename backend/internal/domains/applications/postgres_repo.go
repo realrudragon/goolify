@@ -35,8 +35,35 @@ type Application struct {
 	DockerRegistryImageName string            `json:"docker_registry_image_name,omitempty"`
 	DockerRegistryImageTag  string            `json:"docker_registry_image_tag,omitempty"`
 	DockerfileLocation      string            `json:"dockerfile_location,omitempty"`
+	DockerComposeLocation   string            `json:"docker_compose_location,omitempty"`
 	DockerComposeRaw        string            `json:"docker_compose_raw,omitempty"`
 	PortsExposes            string            `json:"ports_exposes,omitempty"`
+	BaseDirectory           string            `json:"base_directory,omitempty"`
+	PublishDirectory        string            `json:"publish_directory,omitempty"`
+	InstallCommand          string            `json:"install_command,omitempty"`
+	BuildCommand            string            `json:"build_command,omitempty"`
+	StartCommand            string            `json:"start_command,omitempty"`
+	CustomLabels            string            `json:"custom_labels,omitempty"`
+	CustomDockerRunOptions  string            `json:"custom_docker_run_options,omitempty"`
+	HealthCheckEnabled      bool              `json:"health_check_enabled"`
+	HealthCheckPath         string            `json:"health_check_path,omitempty"`
+	HealthCheckPort         string            `json:"health_check_port,omitempty"`
+	HealthCheckHost         string            `json:"health_check_host,omitempty"`
+	HealthCheckMethod       string            `json:"health_check_method,omitempty"`
+	HealthCheckReturnCode   int               `json:"health_check_return_code"`
+	HealthCheckScheme       string            `json:"health_check_scheme,omitempty"`
+	HealthCheckResponseText string            `json:"health_check_response_text,omitempty"`
+	HealthCheckInterval     int               `json:"health_check_interval"`
+	HealthCheckTimeout      int               `json:"health_check_timeout"`
+	HealthCheckRetries      int               `json:"health_check_retries"`
+	HealthCheckStartPeriod  int               `json:"health_check_start_period"`
+	LimitsMemory            string            `json:"limits_memory,omitempty"`
+	LimitsMemorySwap        string            `json:"limits_memory_swap,omitempty"`
+	LimitsMemorySwappiness  int               `json:"limits_memory_swappiness"`
+	LimitsMemoryReservation string            `json:"limits_memory_reservation,omitempty"`
+	LimitsCPUs              string            `json:"limits_cpus,omitempty"`
+	LimitsCPUSet            string            `json:"limits_cpuset,omitempty"`
+	LimitsCPUShares         int               `json:"limits_cpu_shares"`
 	Status                  string            `json:"status"`
 	EnvironmentID           int64             `json:"environment_id"`
 	EnvironmentUUID         string            `json:"environment_uuid,omitempty"`
@@ -46,6 +73,7 @@ type Application struct {
 	ServerID                int64             `json:"server_id"`
 	ServerUUID              string            `json:"server_uuid,omitempty"`
 	PrivateKeyID            *int64            `json:"private_key_id,omitempty"`
+	PrivateKeyUUID          string            `json:"private_key_uuid,omitempty"`
 	Settings                map[string]string `json:"settings,omitempty"`
 	UpdatedAt               time.Time         `json:"updated_at"`
 }
@@ -53,6 +81,8 @@ type Application struct {
 type CreateApplicationInput struct {
 	Dockerfile              string            `json:"dockerfile"`
 	DestinationUUID         string            `json:"destination_uuid"`
+	PrivateKeyUUID          string            `json:"private_key_uuid,omitempty"`
+	GitHubAppUUID           string            `json:"github_app_uuid,omitempty"`
 	Name                    string            `json:"name"`
 	Description             string            `json:"description"`
 	ProjectUUID             string            `json:"project_uuid,omitempty"`
@@ -66,8 +96,11 @@ type CreateApplicationInput struct {
 	DockerRegistryImageName string            `json:"docker_registry_image_name"`
 	DockerRegistryImageTag  string            `json:"docker_registry_image_tag"`
 	DockerfileLocation      string            `json:"dockerfile_location"`
+	DockerComposeLocation   string            `json:"docker_compose_location,omitempty"`
 	DockerComposeRaw        string            `json:"docker_compose_raw"`
 	PortsExposes            string            `json:"ports_exposes"`
+	BaseDirectory           string            `json:"base_directory,omitempty"`
+	PublishDirectory        string            `json:"publish_directory,omitempty"`
 	WebhookSecretGitHub     string            `json:"webhook_secret_github,omitempty"`
 	Settings                map[string]string `json:"settings,omitempty"`
 }
@@ -148,32 +181,58 @@ func (s *PostgresService) Resolver() *deploymentcontext.Resolver {
 func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID string, previewID *int64) (deploymentcontext.DeploymentSource, error) {
 	var src deploymentcontext.DeploymentSource
 	var imgName, imgTag, dfLoc, fqdn, gitRepo, gitBranch *string
+	var dockerfile, composeRaw, composeLoc, portsExposes, baseDir, publishDir, customLabels, customRunOpts *string
+	var hcPath, hcPort, hcHost, hcMethod, hcScheme, hcRespText *string
+	var hcEnabled bool
+	var hcRetCode, hcInterval, hcTimeout, hcRetries, hcStartPeriod int
+	var limMem, limMemSwap, limMemRes, limCPUs, limCPUSet *string
+	var limMemSwappiness, limCPUShares int
+	var appPKRaw *string
+	var dockerNet string
 	var pkID *int64
 	var pkUUID *string
 	var pkTeam *int64
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT a.id, a.uuid, e.id, e.uuid, p.id, p.uuid, p.team_id,
-		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'),
+		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'), COALESCE(NULLIF(sd.network, ''), 'coolify'),
 		       COALESCE(a.private_key_id, srv.private_key_id),
-		       pk.uuid, pk.team_id,
+		       pk.uuid, pk.team_id, app_pk.private_key,
 		       a.build_pack, a.docker_registry_image_name, a.docker_registry_image_tag,
-		       a.dockerfile_location, a.fqdn, a.git_repository, a.git_branch
+		       a.dockerfile_location, a.fqdn, a.git_repository, a.git_branch,
+		       a.dockerfile, a.docker_compose_raw, a.docker_compose_location, a.ports_exposes,
+		       a.base_directory, a.publish_directory, a.custom_labels, a.custom_docker_run_options,
+		       COALESCE(a.health_check_enabled, FALSE), a.health_check_path, a.health_check_port,
+		       a.health_check_host, a.health_check_method, COALESCE(a.health_check_return_code, 200),
+		       a.health_check_scheme, a.health_check_response_text,
+		       COALESCE(a.health_check_interval, 5), COALESCE(a.health_check_timeout, 5),
+		       COALESCE(a.health_check_retries, 10), COALESCE(a.health_check_start_period, 5),
+		       a.limits_memory, a.limits_memory_swap, COALESCE(a.limits_memory_swappiness, 60),
+		       a.limits_memory_reservation, a.limits_cpus, a.limits_cpuset, COALESCE(a.limits_cpu_shares, 1024)
 		FROM applications a
 		JOIN environments e ON e.id = a.environment_id
 		JOIN projects p ON p.id = e.project_id
 		LEFT JOIN standalone_dockers sd ON sd.id = a.destination_id
 		LEFT JOIN servers srv ON srv.id = COALESCE(sd.server_id, 0)
 		LEFT JOIN private_keys pk ON pk.id = COALESCE(a.private_key_id, srv.private_key_id)
+		LEFT JOIN private_keys app_pk ON app_pk.id = a.private_key_id
 		WHERE a.uuid = $1
 	`, appUUID).Scan(
 		&src.ApplicationID, &src.ApplicationUUID,
 		&src.EnvironmentID, &src.EnvironmentUUID,
 		&src.ProjectID, &src.ProjectUUID, &src.ResourceTeamID,
-		&src.ServerID, &src.ServerUUID,
-		&pkID, &pkUUID, &pkTeam,
+		&src.ServerID, &src.ServerUUID, &dockerNet,
+		&pkID, &pkUUID, &pkTeam, &appPKRaw,
 		&src.BuildPack, &imgName, &imgTag,
 		&dfLoc, &fqdn, &gitRepo, &gitBranch,
+		&dockerfile, &composeRaw, &composeLoc, &portsExposes,
+		&baseDir, &publishDir, &customLabels, &customRunOpts,
+		&hcEnabled, &hcPath, &hcPort,
+		&hcHost, &hcMethod, &hcRetCode,
+		&hcScheme, &hcRespText,
+		&hcInterval, &hcTimeout, &hcRetries, &hcStartPeriod,
+		&limMem, &limMemSwap, &limMemSwappiness,
+		&limMemRes, &limCPUs, &limCPUSet, &limCPUShares,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return deploymentcontext.DeploymentSource{}, ErrNotFound
@@ -181,6 +240,7 @@ func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID str
 	if err != nil {
 		return deploymentcontext.DeploymentSource{}, err
 	}
+	src.DockerNetwork = dockerNet
 	if pkID != nil {
 		src.PrivateKeyID = *pkID
 	}
@@ -190,24 +250,83 @@ func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID str
 	if pkTeam != nil {
 		src.PrivateKeyTeam = *pkTeam
 	}
+	if appPKRaw != nil && *appPKRaw != "" {
+		src.DeployPrivateKey = s.decryptOpt(appPKRaw)
+	}
 	src.Settings = s.loadApplicationSettingsMap(ctx, src.ApplicationID)
-	if imgName != nil && *imgName != "" {
-		src.Settings["docker_registry_image_name"] = *imgName
+	setOpt := func(k string, p *string) {
+		if p != nil && *p != "" {
+			src.Settings[k] = *p
+		}
 	}
-	if imgTag != nil && *imgTag != "" {
-		src.Settings["docker_registry_image_tag"] = *imgTag
+	setOpt("docker_registry_image_name", imgName)
+	setOpt("docker_registry_image_tag", imgTag)
+	setOpt("dockerfile_location", dfLoc)
+	setOpt("fqdn", fqdn)
+	setOpt("git_repository", gitRepo)
+	setOpt("git_branch", gitBranch)
+	setOpt("dockerfile", dockerfile)
+	setOpt("docker_compose_raw", composeRaw)
+	setOpt("docker_compose_location", composeLoc)
+	setOpt("ports_exposes", portsExposes)
+	setOpt("base_directory", baseDir)
+	setOpt("publish_directory", publishDir)
+	setOpt("custom_labels", customLabels)
+	setOpt("custom_docker_run_options", customRunOpts)
+	if hcEnabled {
+		src.Settings["health_check_enabled"] = "true"
+		setOpt("health_check_path", hcPath)
+		setOpt("health_check_port", hcPort)
+		setOpt("health_check_host", hcHost)
+		setOpt("health_check_method", hcMethod)
+		setOpt("health_check_scheme", hcScheme)
+		setOpt("health_check_response_text", hcRespText)
+		src.Settings["health_check_return_code"] = strconv.Itoa(hcRetCode)
+		src.Settings["health_check_interval"] = strconv.Itoa(hcInterval)
+		src.Settings["health_check_timeout"] = strconv.Itoa(hcTimeout)
+		src.Settings["health_check_retries"] = strconv.Itoa(hcRetries)
+		src.Settings["health_check_start_period"] = strconv.Itoa(hcStartPeriod)
 	}
-	if dfLoc != nil && *dfLoc != "" {
-		src.Settings["dockerfile_location"] = *dfLoc
+	setOpt("limits_memory", limMem)
+	setOpt("limits_memory_swap", limMemSwap)
+	setOpt("limits_memory_reservation", limMemRes)
+	setOpt("limits_cpus", limCPUs)
+	setOpt("limits_cpuset", limCPUSet)
+	if limMemSwappiness != 60 {
+		src.Settings["limits_memory_swappiness"] = strconv.Itoa(limMemSwappiness)
 	}
-	if fqdn != nil && *fqdn != "" {
-		src.Settings["fqdn"] = *fqdn
+	if limCPUShares != 1024 && limCPUShares > 0 {
+		src.Settings["limits_cpu_shares"] = strconv.Itoa(limCPUShares)
 	}
-	if gitRepo != nil && *gitRepo != "" {
-		src.Settings["git_repository"] = *gitRepo
+
+	// Load persistent volumes & file mounts attached to this application
+	if pvRows, pvErr := s.pool.Query(ctx, `
+		SELECT name, COALESCE(host_path, ''), mount_path
+		FROM local_persistent_volumes
+		WHERE resource_type = 'App\Models\Application' AND resource_id = $1
+		ORDER BY id ASC
+	`, src.ApplicationID); pvErr == nil {
+		for pvRows.Next() {
+			var vm deploymentcontext.VolumeMount
+			if pvRows.Scan(&vm.Name, &vm.HostPath, &vm.MountPath) == nil {
+				src.PersistentVolumes = append(src.PersistentVolumes, vm)
+			}
+		}
+		pvRows.Close()
 	}
-	if gitBranch != nil && *gitBranch != "" {
-		src.Settings["git_branch"] = *gitBranch
+	if fvRows, fvErr := s.pool.Query(ctx, `
+		SELECT COALESCE(fs_path, ''), mount_path, COALESCE(content, ''), COALESCE(is_directory, FALSE)
+		FROM local_file_volumes
+		WHERE resource_type = 'App\Models\Application' AND resource_id = $1
+		ORDER BY id ASC
+	`, src.ApplicationID); fvErr == nil {
+		for fvRows.Next() {
+			var fm deploymentcontext.FileMount
+			if fvRows.Scan(&fm.FSPath, &fm.MountPath, &fm.Content, &fm.IsDirectory) == nil {
+				src.FileVolumes = append(src.FileVolumes, fm)
+			}
+		}
+		fvRows.Close()
 	}
 
 	// Load shared environment variables for Team, Project, and Environment
@@ -371,22 +490,51 @@ func (s *PostgresService) loadByUUID(ctx context.Context, uuid string) (Applicat
 		SELECT a.id, a.uuid, a.name, COALESCE(a.description, ''), COALESCE(a.fqdn, ''),
 		       COALESCE(a.git_repository, ''), a.git_branch, a.build_pack,
 		       COALESCE(a.docker_registry_image_name, ''), COALESCE(a.docker_registry_image_tag, ''),
-		       COALESCE(a.dockerfile_location, ''), COALESCE(a.docker_compose_raw, ''), COALESCE(a.ports_exposes, ''),
+		       COALESCE(a.dockerfile_location, ''), COALESCE(a.docker_compose_location, '/docker-compose.yaml'),
+		       COALESCE(a.docker_compose_raw, ''), COALESCE(a.ports_exposes, ''),
+		       COALESCE(a.base_directory, '/'), COALESCE(a.publish_directory, ''),
+		       COALESCE(a.install_command, ''), COALESCE(a.build_command, ''), COALESCE(a.start_command, ''),
+		       COALESCE(a.custom_labels, ''), COALESCE(a.custom_docker_run_options, ''),
+		       COALESCE(a.health_check_enabled, FALSE), COALESCE(a.health_check_path, '/'),
+		       COALESCE(a.health_check_port, ''), COALESCE(a.health_check_host, 'localhost'),
+		       COALESCE(a.health_check_method, 'GET'), COALESCE(a.health_check_return_code, 200),
+		       COALESCE(a.health_check_scheme, 'http'), COALESCE(a.health_check_response_text, ''),
+		       COALESCE(a.health_check_interval, 5), COALESCE(a.health_check_timeout, 5),
+		       COALESCE(a.health_check_retries, 10), COALESCE(a.health_check_start_period, 5),
+		       COALESCE(a.limits_memory, '0'), COALESCE(a.limits_memory_swap, '0'),
+		       COALESCE(a.limits_memory_swappiness, 60), COALESCE(a.limits_memory_reservation, '0'),
+		       COALESCE(a.limits_cpus, '0'), COALESCE(a.limits_cpuset, ''), COALESCE(a.limits_cpu_shares, 1024),
 		       a.status, a.environment_id, e.uuid, p.uuid, p.team_id, a.destination_id,
-		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'), a.updated_at, COALESCE(a.dockerfile,'')
+		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'),
+		       a.private_key_id, COALESCE(pk.uuid, ''), a.updated_at, COALESCE(a.dockerfile,'')
 		FROM applications a
 		JOIN environments e ON e.id = a.environment_id
 		JOIN projects p ON p.id = e.project_id
 		LEFT JOIN standalone_dockers sd ON sd.id = a.destination_id
 		LEFT JOIN servers srv ON srv.id = COALESCE(sd.server_id, 0)
+		LEFT JOIN private_keys pk ON pk.id = a.private_key_id
 		WHERE a.uuid = $1
 	`, uuid).Scan(
 		&a.ID, &a.UUID, &a.Name, &a.Description, &a.FQDN,
 		&a.GitRepository, &a.GitBranch, &a.BuildPack,
 		&a.DockerRegistryImageName, &a.DockerRegistryImageTag,
-		&a.DockerfileLocation, &a.DockerComposeRaw, &a.PortsExposes,
+		&a.DockerfileLocation, &a.DockerComposeLocation,
+		&a.DockerComposeRaw, &a.PortsExposes,
+		&a.BaseDirectory, &a.PublishDirectory,
+		&a.InstallCommand, &a.BuildCommand, &a.StartCommand,
+		&a.CustomLabels, &a.CustomDockerRunOptions,
+		&a.HealthCheckEnabled, &a.HealthCheckPath,
+		&a.HealthCheckPort, &a.HealthCheckHost,
+		&a.HealthCheckMethod, &a.HealthCheckReturnCode,
+		&a.HealthCheckScheme, &a.HealthCheckResponseText,
+		&a.HealthCheckInterval, &a.HealthCheckTimeout,
+		&a.HealthCheckRetries, &a.HealthCheckStartPeriod,
+		&a.LimitsMemory, &a.LimitsMemorySwap,
+		&a.LimitsMemorySwappiness, &a.LimitsMemoryReservation,
+		&a.LimitsCPUs, &a.LimitsCPUSet, &a.LimitsCPUShares,
 		&a.Status, &a.EnvironmentID, &a.EnvironmentUUID, &a.ProjectUUID, &a.TeamID, &a.DestinationID,
-		&a.ServerID, &a.ServerUUID, &a.UpdatedAt, &a.Dockerfile,
+		&a.ServerID, &a.ServerUUID,
+		&a.PrivateKeyID, &a.PrivateKeyUUID, &a.UpdatedAt, &a.Dockerfile,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Application{}, ErrNotFound
@@ -727,6 +875,42 @@ func (s *PostgresService) Create(ctx context.Context, principal auth.Principal, 
 	row := compat.ModelRow{Name: name}
 	_ = s.hooks.ApplyModelDefaults("application", &row)
 
+	var appPrivateKeyID *int64
+	if strings.TrimSpace(in.PrivateKeyUUID) != "" {
+		var pkID, pkTeamID int64
+		if err := s.pool.QueryRow(ctx, `SELECT id, team_id FROM private_keys WHERE uuid = $1`, strings.TrimSpace(in.PrivateKeyUUID)).Scan(&pkID, &pkTeamID); err != nil {
+			return Application{}, errors.New("private key not found")
+		}
+		if pkTeamID != projTeamID {
+			return Application{}, fmt.Errorf("%w: private key belongs to another team", access.ErrForbidden)
+		}
+		appPrivateKeyID = &pkID
+	}
+	var sourceID *int64
+	var sourceType *string
+	if strings.TrimSpace(in.GitHubAppUUID) != "" {
+		var ghID, ghTeamID int64
+		var isSystemWide bool
+		if err := s.pool.QueryRow(ctx, `SELECT id, team_id, COALESCE(is_system_wide, FALSE) FROM github_apps WHERE uuid = $1`, strings.TrimSpace(in.GitHubAppUUID)).Scan(&ghID, &ghTeamID, &isSystemWide); err != nil {
+			return Application{}, errors.New("github app source not found")
+		}
+		if ghTeamID != projTeamID && !isSystemWide {
+			return Application{}, fmt.Errorf("%w: github app belongs to another team", access.ErrForbidden)
+		}
+		sourceID = &ghID
+		st := `App\Models\GithubApp`
+		sourceType = &st
+	}
+
+	baseDir := strings.TrimSpace(in.BaseDirectory)
+	if baseDir == "" {
+		baseDir = "/"
+	}
+	composeLoc := strings.TrimSpace(in.DockerComposeLocation)
+	if composeLoc == "" {
+		composeLoc = "/docker-compose.yaml"
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Application{}, err
@@ -739,15 +923,17 @@ func (s *PostgresService) Create(ctx context.Context, principal auth.Principal, 
 		INSERT INTO applications (
 			uuid, name, description, fqdn, git_repository, git_branch, build_pack,
 			docker_registry_image_name, docker_registry_image_tag, dockerfile_location,
-			docker_compose_raw, ports_exposes, status, environment_id, destination_id,
+			docker_compose_location, docker_compose_raw, ports_exposes, base_directory, publish_directory,
+			status, environment_id, destination_id, private_key_id, source_id, source_type,
 			manual_webhook_secret_github, dockerfile
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'exited',$13,$14,$15,$16)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'exited',$16,$17,$18,$19,$20,$21,$22)
 		RETURNING id, updated_at
 	`, row.UUID, name, compat.SanitizeString(in.Description), strings.TrimSpace(in.FQDN),
 		strings.TrimSpace(in.GitRepository), branch, bp,
 		strings.TrimSpace(in.DockerRegistryImageName), strings.TrimSpace(in.DockerRegistryImageTag),
-		strings.TrimSpace(in.DockerfileLocation), in.DockerComposeRaw, strings.TrimSpace(in.PortsExposes),
-		envID, destID, in.WebhookSecretGitHub, in.Dockerfile,
+		strings.TrimSpace(in.DockerfileLocation), composeLoc, in.DockerComposeRaw, strings.TrimSpace(in.PortsExposes),
+		baseDir, strings.TrimSpace(in.PublishDirectory),
+		envID, destID, appPrivateKeyID, sourceID, sourceType, in.WebhookSecretGitHub, in.Dockerfile,
 	).Scan(&appID, &updatedAt)
 	if err != nil {
 		return Application{}, err

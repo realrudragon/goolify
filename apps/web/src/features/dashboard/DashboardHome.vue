@@ -123,15 +123,21 @@ async function load() {
     if (serverResult.status === 'fulfilled') {
         const metrics = await Promise.allSettled(
             serverResult.value.map(async (server) => {
-                const settings = await apiRequest<{ is_metrics_enabled: boolean }>(
-                    `/api/v1/servers/${encodeURIComponent(server.uuid)}/sentinel`,
-                    { signal },
-                );
-                if (!settings.is_metrics_enabled) return null;
-                const values = await apiRequest<{ cpu_percent: number; memory_percent: number }>(
-                    `/canvas/api/servers/${encodeURIComponent(server.uuid)}/canvas/usage`,
-                    { signal },
-                );
+                const values = await apiRequest<{
+                    cpu_percent: number;
+                    memory_percent: number;
+                    disk_percent?: number;
+                    has_metrics?: boolean;
+                }>(`/canvas/api/servers/${encodeURIComponent(server.uuid)}/canvas/usage`, {
+                    signal,
+                });
+                if (
+                    values.has_metrics === false ||
+                    !Number.isFinite(values.cpu_percent) ||
+                    !Number.isFinite(values.memory_percent)
+                ) {
+                    return null;
+                }
                 return { uuid: server.uuid, values };
             }),
         );

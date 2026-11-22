@@ -39,28 +39,45 @@ type EnvVarRecord struct {
 	IsLocked    bool     `json:"is_locked"`
 }
 
+type VolumeMount struct {
+	Name      string `json:"name"`
+	HostPath  string `json:"host_path,omitempty"`
+	MountPath string `json:"mount_path"`
+}
+
+type FileMount struct {
+	FSPath      string `json:"fs_path"`
+	MountPath   string `json:"mount_path"`
+	Content     string `json:"-"`
+	IsDirectory bool   `json:"is_directory"`
+}
+
 type DeploymentSource struct {
-	ApplicationID   int64
-	ApplicationUUID string
-	EnvironmentID   int64
-	EnvironmentUUID string
-	ProjectID       int64
-	ProjectUUID     string
-	ResourceTeamID  int64
-	ServerID        int64
-	ServerUUID      string
-	PrivateKeyID    int64
-	PrivateKeyUUID  string
-	PrivateKeyTeam  int64
-	GitSourceUUID   string
-	GitSourceTeam   int64
-	BuildPack       string
-	Settings        map[string]string
-	TeamVars        []EnvVarRecord
-	ProjectVars     []EnvVarRecord
-	EnvironmentVars []EnvVarRecord
-	ResourceVars    []EnvVarRecord
-	PreviewVars     []EnvVarRecord
+	ApplicationID     int64
+	ApplicationUUID   string
+	EnvironmentID     int64
+	EnvironmentUUID   string
+	ProjectID         int64
+	ProjectUUID       string
+	ResourceTeamID    int64
+	ServerID          int64
+	ServerUUID        string
+	DockerNetwork     string
+	PrivateKeyID      int64
+	PrivateKeyUUID    string
+	PrivateKeyTeam    int64
+	DeployPrivateKey  string
+	GitSourceUUID     string
+	GitSourceTeam     int64
+	BuildPack         string
+	Settings          map[string]string
+	TeamVars          []EnvVarRecord
+	ProjectVars       []EnvVarRecord
+	EnvironmentVars   []EnvVarRecord
+	ResourceVars      []EnvVarRecord
+	PreviewVars       []EnvVarRecord
+	PersistentVolumes []VolumeMount
+	FileVolumes       []FileMount
 }
 
 type Repository interface {
@@ -68,18 +85,22 @@ type Repository interface {
 }
 
 type DeploymentContext struct {
-	ApplicationUUID string            `json:"application_uuid"`
-	ProjectUUID     string            `json:"project_uuid"`
-	EnvironmentUUID string            `json:"environment_uuid"`
-	ResourceTeamID  int64             `json:"resource_team_id"`
-	PreviewID       *int64            `json:"preview_id,omitempty"`
-	ServerUUID      string            `json:"server_uuid"`
-	PrivateKeyUUID  string            `json:"private_key_uuid"`
-	GitSourceUUID   string            `json:"git_source_uuid,omitempty"`
-	BuildPack       string            `json:"build_pack"`
-	InputRevision   string            `json:"input_revision"`
-	Settings        map[string]string `json:"settings,omitempty"`
-	EnvEntries      []EnvVarRecord    `json:"-"` // Never expose resolved plaintext secrets in default JSON logs
+	ApplicationUUID   string            `json:"application_uuid"`
+	ProjectUUID       string            `json:"project_uuid"`
+	EnvironmentUUID   string            `json:"environment_uuid"`
+	ResourceTeamID    int64             `json:"resource_team_id"`
+	PreviewID         *int64            `json:"preview_id,omitempty"`
+	ServerUUID        string            `json:"server_uuid"`
+	DockerNetwork     string            `json:"docker_network,omitempty"`
+	PrivateKeyUUID    string            `json:"private_key_uuid"`
+	DeployPrivateKey  string            `json:"-"` // Never expose decrypted deploy key in JSON logs
+	GitSourceUUID     string            `json:"git_source_uuid,omitempty"`
+	BuildPack         string            `json:"build_pack"`
+	InputRevision     string            `json:"input_revision"`
+	Settings          map[string]string `json:"settings,omitempty"`
+	EnvEntries        []EnvVarRecord    `json:"-"` // Never expose resolved plaintext secrets in default JSON logs
+	PersistentVolumes []VolumeMount     `json:"persistent_volumes,omitempty"`
+	FileVolumes       []FileMount       `json:"file_volumes,omitempty"`
 }
 
 type Resolver struct {
@@ -132,18 +153,22 @@ func (r *Resolver) Resolve(ctx context.Context, principal auth.Principal, applic
 
 	revHash := computeInputRevision(src, resolved)
 	return DeploymentContext{
-		ApplicationUUID: src.ApplicationUUID,
-		ProjectUUID:     src.ProjectUUID,
-		EnvironmentUUID: src.EnvironmentUUID,
-		ResourceTeamID:  src.ResourceTeamID,
-		PreviewID:       previewID,
-		ServerUUID:      src.ServerUUID,
-		PrivateKeyUUID:  src.PrivateKeyUUID,
-		GitSourceUUID:   src.GitSourceUUID,
-		BuildPack:       src.BuildPack,
-		InputRevision:   revHash,
-		Settings:        src.Settings,
-		EnvEntries:      resolved,
+		ApplicationUUID:   src.ApplicationUUID,
+		ProjectUUID:       src.ProjectUUID,
+		EnvironmentUUID:   src.EnvironmentUUID,
+		ResourceTeamID:    src.ResourceTeamID,
+		PreviewID:         previewID,
+		ServerUUID:        src.ServerUUID,
+		DockerNetwork:     src.DockerNetwork,
+		PrivateKeyUUID:    src.PrivateKeyUUID,
+		DeployPrivateKey:  src.DeployPrivateKey,
+		GitSourceUUID:     src.GitSourceUUID,
+		BuildPack:         src.BuildPack,
+		InputRevision:     revHash,
+		Settings:          src.Settings,
+		EnvEntries:        resolved,
+		PersistentVolumes: src.PersistentVolumes,
+		FileVolumes:       src.FileVolumes,
 	}, nil
 }
 

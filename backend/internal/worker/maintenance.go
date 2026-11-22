@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/coollabsio/coolify/backend/internal/domains/notifications"
+	domainops "github.com/coollabsio/coolify/backend/internal/domains/ops"
 	"github.com/coollabsio/coolify/backend/internal/opscli"
 )
 
@@ -197,5 +198,6 @@ func (r *Runner) RunMaintenanceSweep(ctx context.Context) error {
 	_, _ = ops.CleanupImportUploads(ctx, 24*time.Hour)
 	_, _ = r.SweepApiTokenExpirations(ctx, 7)
 	_, _ = r.SweepMissingBackups(ctx)
+	_, _ = domainops.PruneOldServerMetrics(ctx, r.cfg.Pool, 30*24*time.Hour)
 	return nil
 }

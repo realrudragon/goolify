@@ -1285,11 +1285,47 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 			return
 		}
 		var body struct {
-			Name        *string           `json:"name"`
-			Description *string           `json:"description"`
-			FQDN        *string           `json:"fqdn"`
-			GitBranch   *string           `json:"git_branch"`
-			Settings    map[string]string `json:"settings"`
+			Name                    *string           `json:"name"`
+			Description             *string           `json:"description"`
+			FQDN                    *string           `json:"fqdn"`
+			GitRepository           *string           `json:"git_repository"`
+			GitBranch               *string           `json:"git_branch"`
+			BuildPack               *string           `json:"build_pack"`
+			DockerRegistryImageName *string           `json:"docker_registry_image_name"`
+			DockerRegistryImageTag  *string           `json:"docker_registry_image_tag"`
+			Dockerfile              *string           `json:"dockerfile"`
+			DockerfileLocation      *string           `json:"dockerfile_location"`
+			DockerComposeLocation   *string           `json:"docker_compose_location"`
+			DockerComposeRaw        *string           `json:"docker_compose_raw"`
+			PortsExposes            *string           `json:"ports_exposes"`
+			BaseDirectory           *string           `json:"base_directory"`
+			PublishDirectory        *string           `json:"publish_directory"`
+			InstallCommand          *string           `json:"install_command"`
+			BuildCommand            *string           `json:"build_command"`
+			StartCommand            *string           `json:"start_command"`
+			CustomLabels            *string           `json:"custom_labels"`
+			CustomDockerRunOptions  *string           `json:"custom_docker_run_options"`
+			PrivateKeyUUID          *string           `json:"private_key_uuid"`
+			HealthCheckEnabled      *bool             `json:"health_check_enabled"`
+			HealthCheckPath         *string           `json:"health_check_path"`
+			HealthCheckPort         *string           `json:"health_check_port"`
+			HealthCheckHost         *string           `json:"health_check_host"`
+			HealthCheckMethod       *string           `json:"health_check_method"`
+			HealthCheckReturnCode   *int              `json:"health_check_return_code"`
+			HealthCheckScheme       *string           `json:"health_check_scheme"`
+			HealthCheckResponseText *string           `json:"health_check_response_text"`
+			HealthCheckInterval     *int              `json:"health_check_interval"`
+			HealthCheckTimeout      *int              `json:"health_check_timeout"`
+			HealthCheckRetries      *int              `json:"health_check_retries"`
+			HealthCheckStartPeriod  *int              `json:"health_check_start_period"`
+			LimitsMemory            *string           `json:"limits_memory"`
+			LimitsMemorySwap        *string           `json:"limits_memory_swap"`
+			LimitsMemorySwappiness  *int              `json:"limits_memory_swappiness"`
+			LimitsMemoryReservation *string           `json:"limits_memory_reservation"`
+			LimitsCPUs              *string           `json:"limits_cpus"`
+			LimitsCPUSet            *string           `json:"limits_cpuset"`
+			LimitsCPUShares         *int              `json:"limits_cpu_shares"`
+			Settings                map[string]string `json:"settings"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid application update"})
@@ -1304,18 +1340,169 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 		if body.FQDN != nil {
 			appRec.FQDN = strings.TrimSpace(*body.FQDN)
 		}
+		if body.GitRepository != nil {
+			appRec.GitRepository = strings.TrimSpace(*body.GitRepository)
+		}
 		if body.GitBranch != nil && strings.TrimSpace(*body.GitBranch) != "" {
 			appRec.GitBranch = strings.TrimSpace(*body.GitBranch)
 		}
-		_, _ = a.Pool.Exec(r.Context(), `UPDATE applications SET name = $1, description = $2, fqdn = $3, git_branch = $4, updated_at = NOW() WHERE id = $5`,
-			appRec.Name, appRec.Description, appRec.FQDN, appRec.GitBranch, appRec.ID)
+		if body.BuildPack != nil && strings.TrimSpace(*body.BuildPack) != "" {
+			appRec.BuildPack = strings.TrimSpace(*body.BuildPack)
+		}
+		if body.DockerRegistryImageName != nil {
+			appRec.DockerRegistryImageName = strings.TrimSpace(*body.DockerRegistryImageName)
+		}
+		if body.DockerRegistryImageTag != nil {
+			appRec.DockerRegistryImageTag = strings.TrimSpace(*body.DockerRegistryImageTag)
+		}
+		if body.Dockerfile != nil {
+			appRec.Dockerfile = *body.Dockerfile
+		}
+		if body.DockerfileLocation != nil {
+			appRec.DockerfileLocation = strings.TrimSpace(*body.DockerfileLocation)
+		}
+		if body.DockerComposeLocation != nil {
+			appRec.DockerComposeLocation = strings.TrimSpace(*body.DockerComposeLocation)
+		}
+		if body.DockerComposeRaw != nil {
+			appRec.DockerComposeRaw = *body.DockerComposeRaw
+		}
+		if body.PortsExposes != nil {
+			appRec.PortsExposes = strings.TrimSpace(*body.PortsExposes)
+		}
+		if body.BaseDirectory != nil {
+			appRec.BaseDirectory = strings.TrimSpace(*body.BaseDirectory)
+		}
+		if body.PublishDirectory != nil {
+			appRec.PublishDirectory = strings.TrimSpace(*body.PublishDirectory)
+		}
+		if body.InstallCommand != nil {
+			appRec.InstallCommand = strings.TrimSpace(*body.InstallCommand)
+		}
+		if body.BuildCommand != nil {
+			appRec.BuildCommand = strings.TrimSpace(*body.BuildCommand)
+		}
+		if body.StartCommand != nil {
+			appRec.StartCommand = strings.TrimSpace(*body.StartCommand)
+		}
+		if body.CustomLabels != nil {
+			appRec.CustomLabels = *body.CustomLabels
+		}
+		if body.CustomDockerRunOptions != nil {
+			appRec.CustomDockerRunOptions = strings.TrimSpace(*body.CustomDockerRunOptions)
+		}
+		if body.PrivateKeyUUID != nil {
+			pkU := strings.TrimSpace(*body.PrivateKeyUUID)
+			if pkU == "" {
+				appRec.PrivateKeyID = nil
+			} else {
+				var pkID, pkTeam int64
+				if err := a.Pool.QueryRow(r.Context(), `SELECT id, team_id FROM private_keys WHERE uuid = $1`, pkU).Scan(&pkID, &pkTeam); err != nil {
+					writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "private key not found"})
+					return
+				}
+				if pkTeam != appRec.TeamID {
+					writeJSON(w, http.StatusForbidden, map[string]string{"message": "private key belongs to another team"})
+					return
+				}
+				appRec.PrivateKeyID = &pkID
+			}
+		}
+		if body.HealthCheckEnabled != nil {
+			appRec.HealthCheckEnabled = *body.HealthCheckEnabled
+		}
+		if body.HealthCheckPath != nil {
+			appRec.HealthCheckPath = strings.TrimSpace(*body.HealthCheckPath)
+		}
+		if body.HealthCheckPort != nil {
+			appRec.HealthCheckPort = strings.TrimSpace(*body.HealthCheckPort)
+		}
+		if body.HealthCheckHost != nil {
+			appRec.HealthCheckHost = strings.TrimSpace(*body.HealthCheckHost)
+		}
+		if body.HealthCheckMethod != nil {
+			appRec.HealthCheckMethod = strings.TrimSpace(*body.HealthCheckMethod)
+		}
+		if body.HealthCheckReturnCode != nil {
+			appRec.HealthCheckReturnCode = *body.HealthCheckReturnCode
+		}
+		if body.HealthCheckScheme != nil {
+			appRec.HealthCheckScheme = strings.TrimSpace(*body.HealthCheckScheme)
+		}
+		if body.HealthCheckResponseText != nil {
+			appRec.HealthCheckResponseText = *body.HealthCheckResponseText
+		}
+		if body.HealthCheckInterval != nil {
+			appRec.HealthCheckInterval = *body.HealthCheckInterval
+		}
+		if body.HealthCheckTimeout != nil {
+			appRec.HealthCheckTimeout = *body.HealthCheckTimeout
+		}
+		if body.HealthCheckRetries != nil {
+			appRec.HealthCheckRetries = *body.HealthCheckRetries
+		}
+		if body.HealthCheckStartPeriod != nil {
+			appRec.HealthCheckStartPeriod = *body.HealthCheckStartPeriod
+		}
+		if body.LimitsMemory != nil {
+			appRec.LimitsMemory = strings.TrimSpace(*body.LimitsMemory)
+		}
+		if body.LimitsMemorySwap != nil {
+			appRec.LimitsMemorySwap = strings.TrimSpace(*body.LimitsMemorySwap)
+		}
+		if body.LimitsMemorySwappiness != nil {
+			appRec.LimitsMemorySwappiness = *body.LimitsMemorySwappiness
+		}
+		if body.LimitsMemoryReservation != nil {
+			appRec.LimitsMemoryReservation = strings.TrimSpace(*body.LimitsMemoryReservation)
+		}
+		if body.LimitsCPUs != nil {
+			appRec.LimitsCPUs = strings.TrimSpace(*body.LimitsCPUs)
+		}
+		if body.LimitsCPUSet != nil {
+			appRec.LimitsCPUSet = strings.TrimSpace(*body.LimitsCPUSet)
+		}
+		if body.LimitsCPUShares != nil {
+			appRec.LimitsCPUShares = *body.LimitsCPUShares
+		}
+		_, _ = a.Pool.Exec(r.Context(), `
+			UPDATE applications SET
+				name = $1, description = $2, fqdn = $3, git_repository = $4, git_branch = $5, build_pack = $6,
+				docker_registry_image_name = $7, docker_registry_image_tag = $8, dockerfile = $9,
+				dockerfile_location = $10, docker_compose_location = $11, docker_compose_raw = $12,
+				ports_exposes = $13, base_directory = $14, publish_directory = $15,
+				install_command = $16, build_command = $17, start_command = $18,
+				custom_labels = $19, custom_docker_run_options = $20, private_key_id = $21,
+				health_check_enabled = $22, health_check_path = $23, health_check_port = $24,
+				health_check_host = $25, health_check_method = $26, health_check_return_code = $27,
+				health_check_scheme = $28, health_check_response_text = $29, health_check_interval = $30,
+				health_check_timeout = $31, health_check_retries = $32, health_check_start_period = $33,
+				limits_memory = $34, limits_memory_swap = $35, limits_memory_swappiness = $36,
+				limits_memory_reservation = $37, limits_cpus = $38, limits_cpuset = $39, limits_cpu_shares = $40,
+				updated_at = NOW()
+			WHERE id = $41
+		`,
+			appRec.Name, appRec.Description, appRec.FQDN, appRec.GitRepository, appRec.GitBranch, appRec.BuildPack,
+			appRec.DockerRegistryImageName, appRec.DockerRegistryImageTag, appRec.Dockerfile,
+			appRec.DockerfileLocation, appRec.DockerComposeLocation, appRec.DockerComposeRaw,
+			appRec.PortsExposes, appRec.BaseDirectory, appRec.PublishDirectory,
+			appRec.InstallCommand, appRec.BuildCommand, appRec.StartCommand,
+			appRec.CustomLabels, appRec.CustomDockerRunOptions, appRec.PrivateKeyID,
+			appRec.HealthCheckEnabled, appRec.HealthCheckPath, appRec.HealthCheckPort,
+			appRec.HealthCheckHost, appRec.HealthCheckMethod, appRec.HealthCheckReturnCode,
+			appRec.HealthCheckScheme, appRec.HealthCheckResponseText, appRec.HealthCheckInterval,
+			appRec.HealthCheckTimeout, appRec.HealthCheckRetries, appRec.HealthCheckStartPeriod,
+			appRec.LimitsMemory, appRec.LimitsMemorySwap, appRec.LimitsMemorySwappiness,
+			appRec.LimitsMemoryReservation, appRec.LimitsCPUs, appRec.LimitsCPUSet, appRec.LimitsCPUShares,
+			appRec.ID,
+		)
 		if len(body.Settings) > 0 {
 			if err := a.AppSvc.UpdateSettings(r.Context(), appRec.ID, body.Settings); err != nil {
 				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
 				return
 			}
-			appRec, _ = a.AppSvc.GetByUUID(r.Context(), p, appUUID)
 		}
+		appRec, _ = a.AppSvc.GetByUUID(r.Context(), p, appUUID)
 		writeJSON(w, http.StatusOK, appRec)
 	case http.MethodDelete:
 		appRec, err := a.AppSvc.GetByUUID(r.Context(), p, appUUID)

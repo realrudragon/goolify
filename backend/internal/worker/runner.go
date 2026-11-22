@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"sort"
@@ -404,6 +405,9 @@ func (r *Runner) prepareExecutionCommand(ctx context.Context, spec jobs.DurableJ
 		}
 		redactAll := dctx.Settings["redact_all_env_values_in_logs"] == "true"
 		var secrets []string
+		if dctx.DeployPrivateKey != "" {
+			secrets = append(secrets, dctx.DeployPrivateKey)
+		}
 		for _, entry := range dctx.EnvEntries {
 			if (entry.IsLocked || redactAll) && entry.Value != "" {
 				secrets = append(secrets, entry.Value)
@@ -412,6 +416,66 @@ func (r *Runner) prepareExecutionCommand(ctx context.Context, spec jobs.DurableJ
 		workDir := "/data/coolify/applications/" + strings.ReplaceAll(dctx.ApplicationUUID, "'", "")
 		fullCmd := fmt.Sprintf("mkdir -p '%s' && cd '%s' && %s", workDir, workDir, strings.Join(plan.Commands, " && "))
 		return "ssh_exec", fullCmd, secrets, nil
+	}
+	if spec.JobType == "service_deploy" && r.cfg.Pool != nil {
+		var svcID int64
+		var composeYAML, composeRaw, dockerNet string
+		err := r.cfg.Pool.QueryRow(ctx, `
+			SELECT s.id, COALESCE(s.docker_compose, ''), COALESCE(s.docker_compose_raw, ''), COALESCE(NULLIF(sd.network, ''), 'coolify')
+			FROM services s
+			LEFT JOIN standalone_dockers sd ON sd.id = s.destination_id
+			WHERE s.uuid = $1
+		`, spec.ResourceUUID).Scan(&svcID, &composeYAML, &composeRaw, &dockerNet)
+		if err == nil {
+			yamlBody := strings.TrimSpace(composeYAML)
+			if yamlBody == "" {
+				yamlBody = strings.TrimSpace(composeRaw)
+			}
+			var envBuf strings.Builder
+			var secrets []string
+			if eRows, eErr := r.cfg.Pool.Query(ctx, `
+				SELECT key, value, COALESCE(is_shown_once, FALSE)
+				FROM environment_variables
+				WHERE resourceable_type = 'App\Models\Service' AND resourceable_id = $1
+				ORDER BY id ASC
+			`, svcID); eErr == nil {
+				for eRows.Next() {
+					var k string
+					var rawVal *string
+					var locked bool
+					if eRows.Scan(&k, &rawVal, &locked) == nil && strings.TrimSpace(k) != "" {
+						val := ""
+						if rawVal != nil {
+							val = *rawVal
+							if r.cfg.Cipher != nil && val != "" {
+								if plain, dErr := r.cfg.Cipher.DecryptLaravelPayload(val, false); dErr == nil {
+									val = string(plain)
+								}
+							}
+						}
+						if locked && val != "" {
+							secrets = append(secrets, val)
+						}
+						fmt.Fprintf(&envBuf, "%s=%s\n", k, val)
+					}
+				}
+				eRows.Close()
+			}
+			safeUUID := strings.ReplaceAll(spec.ResourceUUID, "'", "")
+			workDir := "/data/coolify/services/" + safeUUID
+			envB64 := base64.StdEncoding.EncodeToString([]byte(envBuf.String()))
+			cmds := []string{
+				fmt.Sprintf("mkdir -p '%s' && cd '%s'", workDir, workDir),
+				fmt.Sprintf("printf %%s '%s' | base64 -d > .env", envB64),
+				fmt.Sprintf("docker network inspect '%s' >/dev/null 2>&1 || docker network create --attachable '%s'", strings.ReplaceAll(dockerNet, "'", ""), strings.ReplaceAll(dockerNet, "'", "")),
+			}
+			if yamlBody != "" {
+				yamlB64 := base64.StdEncoding.EncodeToString([]byte(yamlBody + "\n"))
+				cmds = append(cmds, fmt.Sprintf("printf %%s '%s' | base64 -d > docker-compose.yaml", yamlB64))
+			}
+			cmds = append(cmds, fmt.Sprintf("docker compose --project-name '%s' -f docker-compose.yaml up -d --remove-orphans", safeUUID))
+			return "ssh_exec", strings.Join(cmds, " && "), secrets, nil
+		}
 	}
 	capStr, cmdStr := r.buildExecutionCommand(spec)
 	return capStr, cmdStr, nil, nil
@@ -823,16 +887,25 @@ func int64FromAny(v any) int64 {
 	}
 }
 
-// Run loops continuously processing jobs, outbox events, and due cron schedules until ctx is cancelled.
+// Run loops continuously processing jobs, outbox events, due cron schedules, and periodic server metrics until ctx is cancelled.
 func (r *Runner) Run(ctx context.Context) {
 	jobTicker := time.NewTicker(250 * time.Millisecond)
 	outboxTicker := time.NewTicker(500 * time.Millisecond)
 	schedTicker := time.NewTicker(15 * time.Second)
+	metricsTicker := time.NewTicker(30 * time.Second)
 	maintTicker := time.NewTicker(5 * time.Minute)
 	defer jobTicker.Stop()
 	defer outboxTicker.Stop()
 	defer schedTicker.Stop()
+	defer metricsTicker.Stop()
 	defer maintTicker.Stop()
+
+	// Collect an initial server metrics snapshot shortly after startup without blocking the main loop.
+	go func() {
+		if _, err := r.CollectServerMetrics(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("[worker %s] initial metrics collection error: %v", r.cfg.WorkerID, err)
+		}
+	}()
 
 	for {
 		select {
@@ -858,6 +931,10 @@ func (r *Runner) Run(ctx context.Context) {
 		case now := <-schedTicker.C:
 			if _, err := r.TickSchedules(ctx, now); err != nil {
 				log.Printf("[worker %s] schedule tick error: %v", r.cfg.WorkerID, err)
+			}
+		case <-metricsTicker.C:
+			if _, err := r.CollectServerMetrics(ctx); err != nil {
+				log.Printf("[worker %s] metrics collection error: %v", r.cfg.WorkerID, err)
 			}
 		case <-maintTicker.C:
 			if err := r.RunMaintenanceSweep(ctx); err != nil {
