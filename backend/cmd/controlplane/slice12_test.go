@@ -296,6 +296,7 @@ func TestProductionSlice12_GitCloudDNSServerSubsystems(t *testing.T) {
 	}
 
 	// Registries, Cloudflare Tunnel, Image Scanning, Proxy Config
+	app.Executor = executor.NewClient(&sliceTestTransport{})
 	regAdd := doJSON(t, http.MethodPost, ts.URL+"/api/v1/servers/"+hetSrvOut.UUID+"/registries", rootCookies, rootCSRF, "", map[string]any{
 		"registry": "ghcr.io", "username": "bot", "password": "ghp_secret_password",
 	})

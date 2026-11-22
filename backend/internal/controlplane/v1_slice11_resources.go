@@ -118,7 +118,7 @@ func (a *App) loadResourceMeta(ctx context.Context, kind string, uuid string) (s
 		m.TeamScopedRef = access.ResourceRef{
 			Type: "application", ID: m.ID, UUID: m.UUID,
 			ProjectUUID: m.ProjectUUID, EnvironmentUUID: m.EnvironmentUUID,
-			TeamID: &tid, APISegment: "applications",
+			TeamID: &tid, ServerID: &m.ServerID, APISegment: "applications",
 		}
 		return m, nil
 
@@ -136,7 +136,7 @@ func (a *App) loadResourceMeta(ctx context.Context, kind string, uuid string) (s
 			LEFT JOIN environments e ON e.id = sv.environment_id
 			LEFT JOIN projects p ON p.id = e.project_id
 			LEFT JOIN standalone_dockers sd ON sd.id = sv.destination_id
-			LEFT JOIN servers sr ON sr.id = COALESCE(sd.server_id, sv.server_id)
+			LEFT JOIN servers sr ON sr.id = COALESCE(sv.server_id, sd.server_id)
 			WHERE sv.uuid = $1
 		`, uuid).Scan(&m.ID, &m.UUID, &m.Name, &m.DestinationID, &m.EnvironmentID, &m.EnvironmentUUID, &m.ProjectID, &m.ProjectUUID, &m.TeamID, &m.ServerID, &m.ServerUUID)
 		if err != nil {
@@ -146,7 +146,7 @@ func (a *App) loadResourceMeta(ctx context.Context, kind string, uuid string) (s
 		m.TeamScopedRef = access.ResourceRef{
 			Type: "service", ID: m.ID, UUID: m.UUID,
 			ProjectUUID: m.ProjectUUID, EnvironmentUUID: m.EnvironmentUUID,
-			TeamID: &tid, APISegment: "services",
+			TeamID: &tid, ServerID: &m.ServerID, APISegment: "services",
 		}
 		return m, nil
 
@@ -176,7 +176,7 @@ func (a *App) loadResourceMeta(ctx context.Context, kind string, uuid string) (s
 				m.TeamScopedRef = access.ResourceRef{
 					Type: "database", ID: m.ID, UUID: m.UUID,
 					ProjectUUID: m.ProjectUUID, EnvironmentUUID: m.EnvironmentUUID,
-					TeamID: &tid, APISegment: "databases",
+					TeamID: &tid, ServerID: &m.ServerID, APISegment: "databases",
 				}
 				return m, nil
 			}
@@ -667,8 +667,8 @@ func (a *App) withExtendedProjectRoutes(next authedHandler) authedHandler {
 					var newAppID int64
 					newAppUUID := a.Hooks.NewCUID2()
 					if a.Pool.QueryRow(r.Context(), `
-						INSERT INTO applications (uuid, name, description, fqdn, git_repository, git_branch, build_pack, docker_registry_image_name, docker_registry_image_tag, dockerfile_location, docker_compose_raw, ports_exposes, status, environment_id, destination_id, destination_type, private_key_id)
-						SELECT $1, name, description, NULL, git_repository, git_branch, build_pack, docker_registry_image_name, docker_registry_image_tag, dockerfile_location, docker_compose_raw, ports_exposes, 'exited', $2, destination_id, destination_type, private_key_id
+						INSERT INTO applications (uuid, name, description, fqdn, git_repository, git_branch, build_pack, docker_registry_image_name, docker_registry_image_tag, dockerfile_location, docker_compose_raw, ports_exposes, status, environment_id, destination_id, destination_type, private_key_id,dockerfile)
+						SELECT $1, name, description, NULL, git_repository, git_branch, build_pack, docker_registry_image_name, docker_registry_image_tag, dockerfile_location, docker_compose_raw, ports_exposes, 'exited', $2, destination_id, destination_type, private_key_id,dockerfile
 						FROM applications WHERE id = $3 RETURNING id
 					`, newAppUUID, newEnvID, aid).Scan(&newAppID) == nil {
 						_, _ = a.Pool.Exec(r.Context(), `INSERT INTO application_settings (application_id) VALUES ($1) ON CONFLICT DO NOTHING`, newAppID)
@@ -1177,15 +1177,15 @@ func (a *App) handleVolumeBackupRoute(w http.ResponseWriter, r *http.Request, p 
 	switch r.Method {
 	case http.MethodPut:
 		var body struct {
-			Frequency                   string  `json:"frequency"`
-			Enabled                     *bool   `json:"enabled"`
-			SaveS3                      *bool   `json:"save_s3"`
-			DisableLocalBackup          *bool   `json:"disable_local_backup"`
-			StopDuringBackup            *bool   `json:"stop_during_backup"`
-			S3StorageUUID               *string `json:"s3_storage_uuid"`
-			RetentionAmountLocally      *int    `json:"retention_amount_locally"`
-			Timeout                     *int    `json:"timeout"`
-			MissingBackupNotifyDays     *int    `json:"missing_backup_notification_days"`
+			Frequency               string  `json:"frequency"`
+			Enabled                 *bool   `json:"enabled"`
+			SaveS3                  *bool   `json:"save_s3"`
+			DisableLocalBackup      *bool   `json:"disable_local_backup"`
+			StopDuringBackup        *bool   `json:"stop_during_backup"`
+			S3StorageUUID           *string `json:"s3_storage_uuid"`
+			RetentionAmountLocally  *int    `json:"retention_amount_locally"`
+			Timeout                 *int    `json:"timeout"`
+			MissingBackupNotifyDays *int    `json:"missing_backup_notification_days"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Frequency) == "" {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "frequency is required."})

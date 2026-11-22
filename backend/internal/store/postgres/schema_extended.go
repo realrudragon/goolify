@@ -9,6 +9,7 @@ import (
 
 func ensureExtendedBaselineSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	stmts := []string{
+		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS dockerfile TEXT NULL`,
 		// Additive baseline columns on existing tables (non-destructive IF NOT EXISTS)
 		`ALTER TABLE instance_settings ADD COLUMN IF NOT EXISTS notification_from_address TEXT NULL`,
 		`ALTER TABLE instance_settings ADD COLUMN IF NOT EXISTS notification_from_name TEXT NULL`,

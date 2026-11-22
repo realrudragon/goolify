@@ -3,6 +3,7 @@ package controlplane
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -76,15 +77,27 @@ func (a *App) handleDestinations(w http.ResponseWriter, r *http.Request, p auth.
 		return
 	}
 
-	destUUID := strings.Split(trimmed, "/")[0]
+	parts := strings.Split(trimmed, "/")
+	if len(parts) > 2 || len(parts) == 2 && parts[1] != "resources" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
+	destUUID := parts[0]
 	var id, srvID, teamID int64
 	var name, network, srvUUID string
+	kind := "standalone"
 	err := a.Pool.QueryRow(r.Context(), `
 		SELECT sd.id, sd.name, sd.network, sd.server_id, s.uuid, s.team_id
 		FROM standalone_dockers sd
 		JOIN servers s ON s.id = sd.server_id
 		WHERE sd.uuid = $1 AND s.deleted_at IS NULL
 	`, destUUID).Scan(&id, &name, &network, &srvID, &srvUUID, &teamID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		kind = "swarm"
+		err = a.Pool.QueryRow(r.Context(), `SELECT d.id, d.name, 'coolify-overlay', d.server_id, s.uuid, s.team_id
+			FROM swarm_dockers d JOIN servers s ON s.id=d.server_id WHERE d.uuid=$1 AND s.deleted_at IS NULL`, destUUID).
+			Scan(&id, &name, &network, &srvID, &srvUUID, &teamID)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "destination not found"})
 		return
@@ -94,6 +107,42 @@ func (a *App) handleDestinations(w http.ResponseWriter, r *http.Request, p auth.
 		return
 	}
 	ref := access.ResourceRef{Type: "server", ID: srvID, UUID: srvUUID, TeamID: &teamID, APISegment: "destinations"}
+	if len(parts) == 2 {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+			return
+		}
+		if err := a.Authz.Check(r.Context(), p, access.ActionRead, ref); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		rows, err := a.Pool.Query(r.Context(), destinationResourcesQuery(), id, kind == "swarm")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
+		defer rows.Close()
+		resources := make([]map[string]any, 0)
+		for rows.Next() {
+			var resourceID, resourceTeam int64
+			var uuid, resourceName, resourceType, resourceStatus, projectUUID, envUUID string
+			if err := rows.Scan(&resourceID, &uuid, &resourceName, &resourceType, &resourceStatus, &projectUUID, &envUUID, &resourceTeam); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+				return
+			}
+			resourceRef := access.ResourceRef{Type: resourceType, ID: resourceID, UUID: uuid, ProjectUUID: projectUUID, EnvironmentUUID: envUUID, TeamID: &resourceTeam, APISegment: resourceType + "s"}
+			if resourceTeam != teamID || a.Authz.Check(r.Context(), p, access.ActionRead, resourceRef) != nil {
+				continue
+			}
+			resources = append(resources, map[string]any{"uuid": uuid, "name": resourceName, "type": resourceType, "status": resourceStatus, "project_uuid": projectUUID, "environment_uuid": envUUID})
+		}
+		if err := rows.Err(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, resources)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if err := a.Authz.Check(r.Context(), p, access.ActionRead, ref); err != nil {
@@ -101,7 +150,7 @@ func (a *App) handleDestinations(w http.ResponseWriter, r *http.Request, p auth.
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": id, "uuid": destUUID, "name": name, "network": network, "server_id": srvID, "server_uuid": srvUUID, "team_id": teamID,
+			"id": id, "uuid": destUUID, "name": name, "network": network, "type": kind, "server_id": srvID, "server_uuid": srvUUID, "team_id": teamID,
 		})
 	case http.MethodPatch:
 		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, ref); err != nil {
@@ -122,22 +171,69 @@ func (a *App) handleDestinations(w http.ResponseWriter, r *http.Request, p auth.
 		if body.Network != nil && strings.TrimSpace(*body.Network) != "" {
 			network = compat.SanitizeString(*body.Network)
 		}
-		_, _ = a.Pool.Exec(r.Context(), `UPDATE standalone_dockers SET name = $1, network = $2, updated_at = NOW() WHERE id = $3`, name, network, id)
+		if kind == "swarm" {
+			_, err = a.Pool.Exec(r.Context(), `UPDATE swarm_dockers SET name=$1, updated_at=NOW() WHERE id=$2`, name, id)
+		} else {
+			_, err = a.Pool.Exec(r.Context(), `UPDATE standalone_dockers SET name = $1, network = $2, updated_at = NOW() WHERE id = $3`, name, network, id)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "uuid": destUUID, "name": name, "network": network, "server_id": srvID})
 	case http.MethodDelete:
 		if err := a.Authz.Check(r.Context(), p, access.ActionDelete, ref); err != nil {
 			writeDomainError(w, err)
 			return
 		}
-		if id == 0 {
+		if id == 0 || kind == "standalone" && network == "coolify" {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "cannot delete sentinel standalone_dockers id=0"})
 			return
 		}
-		_, _ = a.Pool.Exec(r.Context(), `DELETE FROM standalone_dockers WHERE id = $1`, id)
+		table := "standalone_dockers"
+		if kind == "swarm" {
+			table = "swarm_dockers"
+		}
+		deleted, err := a.Pool.Exec(r.Context(), fmt.Sprintf(`DELETE FROM %s WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM (%s) occupied)`, table, destinationQuery(true)), id, kind == "swarm")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
+		if deleted.RowsAffected() == 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "Delete or move every attached resource before deleting this destination."})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Destination deleted."})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
 	}
+}
+
+// Table names are a fixed server-owned list, shared by the resources view and deletion guard.
+func destinationResourcesQuery() string {
+	return destinationQuery(false)
+}
+
+func destinationQuery(occupancyOnly bool) string {
+	tables := []struct{ table, kind string }{{"applications", "application"}, {"services", "service"}}
+	for _, spec := range standaloneDBTables {
+		tables = append(tables, struct{ table, kind string }{spec.Table, "database"})
+	}
+	queries := make([]string, 0, len(tables))
+	for _, spec := range tables {
+		condition := `(r.destination_id=$1 AND (COALESCE(r.destination_type,'') LIKE '%SwarmDocker')=$2)`
+		if spec.kind == "application" {
+			condition += ` OR (NOT $2 AND EXISTS (SELECT 1 FROM additional_destinations ad WHERE ad.application_id=r.id AND ad.standalone_docker_id=$1))`
+		}
+		if occupancyOnly {
+			queries = append(queries, fmt.Sprintf(`SELECT r.id FROM %s r WHERE %s`, spec.table, condition))
+			continue
+		}
+		queries = append(queries, fmt.Sprintf(`SELECT r.id,r.uuid,r.name,'%s' AS type,r.status,p.uuid AS project_uuid,e.uuid AS environment_uuid,p.team_id
+			FROM %s r JOIN environments e ON e.id=r.environment_id JOIN projects p ON p.id=e.project_id
+			WHERE %s`, spec.kind, spec.table, condition))
+	}
+	return strings.Join(queries, " UNION ALL ")
 }
 
 func (a *App) handleServerCreateDestination(w http.ResponseWriter, r *http.Request, p auth.Principal, srv servers.Server) {
@@ -354,6 +450,11 @@ func (a *App) handleApplicationClone(w http.ResponseWriter, r *http.Request, p a
 	if newName == "" {
 		newName = src.Name + " (Clone)"
 	}
+	var destinationUUID string
+	if err := a.Pool.QueryRow(r.Context(), `SELECT d.uuid FROM standalone_dockers d JOIN servers s ON s.id=d.server_id WHERE d.id=$1 AND s.uuid=$2`, src.DestinationID, src.ServerUUID).Scan(&destinationUUID); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Application destination not found."})
+		return
+	}
 
 	cloned, err := a.AppSvc.Create(r.Context(), p, applications.CreateApplicationInput{
 		Name:                    newName,
@@ -366,6 +467,8 @@ func (a *App) handleApplicationClone(w http.ResponseWriter, r *http.Request, p a
 		DockerRegistryImageName: src.DockerRegistryImageName,
 		DockerRegistryImageTag:  src.DockerRegistryImageTag,
 		DockerfileLocation:      src.DockerfileLocation,
+		Dockerfile:              src.Dockerfile,
+		DestinationUUID:         destinationUUID,
 		DockerComposeRaw:        src.DockerComposeRaw,
 		PortsExposes:            src.PortsExposes,
 	})

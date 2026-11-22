@@ -94,7 +94,7 @@ func (s *PostgresProjectService) GetProject(ctx context.Context, principal auth.
 	if err != nil {
 		return Project{}, nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, uuid, name, project_id FROM environments WHERE project_id = $1 ORDER BY id ASC`, p.ID)
+	rows, err := s.pool.Query(ctx, `SELECT id, uuid, name, project_id, COALESCE(description,'') FROM environments WHERE project_id = $1 ORDER BY id ASC`, p.ID)
 	if err != nil {
 		return Project{}, nil, err
 	}
@@ -104,7 +104,7 @@ func (s *PostgresProjectService) GetProject(ctx context.Context, principal auth.
 	for rows.Next() {
 		var e Environment
 		e.TeamID = p.TeamID
-		if err := rows.Scan(&e.ID, &e.UUID, &e.Name, &e.ProjectID); err != nil {
+		if err := rows.Scan(&e.ID, &e.UUID, &e.Name, &e.ProjectID, &e.Description); err != nil {
 			return Project{}, nil, err
 		}
 		envs = append(envs, e)
@@ -234,7 +234,7 @@ func (s *PostgresProjectService) CreateProject(ctx context.Context, principal au
 	return p, e, nil
 }
 
-func (s *PostgresProjectService) CreateEnvironment(ctx context.Context, principal auth.Principal, projectUUID string, envName string) (Environment, error) {
+func (s *PostgresProjectService) CreateEnvironment(ctx context.Context, principal auth.Principal, projectUUID string, envName string, descriptions ...string) (Environment, error) {
 	var p Project
 	err := s.pool.QueryRow(ctx, `SELECT id, uuid, name, team_id FROM projects WHERE uuid = $1`, projectUUID).
 		Scan(&p.ID, &p.UUID, &p.Name, &p.TeamID)
@@ -264,11 +264,14 @@ func (s *PostgresProjectService) CreateEnvironment(ctx context.Context, principa
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var e Environment
+	if len(descriptions) > 0 {
+		e.Description = compat.SanitizeString(descriptions[0])
+	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO environments (uuid, name, project_id)
-		VALUES ($1, $2, $3)
+		INSERT INTO environments (uuid, name, project_id, description)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id, uuid, name, project_id
-	`, envRow.UUID, clean, p.ID).Scan(&e.ID, &e.UUID, &e.Name, &e.ProjectID)
+	`, envRow.UUID, clean, p.ID, e.Description).Scan(&e.ID, &e.UUID, &e.Name, &e.ProjectID)
 	if err != nil {
 		return Environment{}, err
 	}

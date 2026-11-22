@@ -81,15 +81,15 @@ func (s *PostgresNotificationService) syncToLaravelTable(ctx context.Context, te
 			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
 			ON CONFLICT (team_id) DO UPDATE SET
 				smtp_enabled = EXCLUDED.smtp_enabled,
-				smtp_from_address = COALESCE(EXCLUDED.smtp_from_address, email_notification_settings.smtp_from_address),
-				smtp_recipients = COALESCE(EXCLUDED.smtp_recipients, email_notification_settings.smtp_recipients),
-				smtp_host = COALESCE(EXCLUDED.smtp_host, email_notification_settings.smtp_host),
-				smtp_port = COALESCE(EXCLUDED.smtp_port, email_notification_settings.smtp_port),
-				smtp_username = COALESCE(EXCLUDED.smtp_username, email_notification_settings.smtp_username),
-				smtp_password = COALESCE(EXCLUDED.smtp_password, email_notification_settings.smtp_password),
+				smtp_from_address = EXCLUDED.smtp_from_address,
+				smtp_recipients = EXCLUDED.smtp_recipients,
+				smtp_host = EXCLUDED.smtp_host,
+				smtp_port = EXCLUDED.smtp_port,
+				smtp_username = EXCLUDED.smtp_username,
+				smtp_password = EXCLUDED.smtp_password,
 				resend_enabled = EXCLUDED.resend_enabled,
-				resend_api_key = COALESCE(EXCLUDED.resend_api_key, email_notification_settings.resend_api_key),
-				resend_from_address = COALESCE(EXCLUDED.resend_from_address, email_notification_settings.resend_from_address),
+				resend_api_key = EXCLUDED.resend_api_key,
+				resend_from_address = EXCLUDED.resend_from_address,
 				use_instance_email_settings = EXCLUDED.use_instance_email_settings,
 				updated_at = NOW()
 		`, teamID, cfg.Enabled, fromAddr, recips, host, nullInt(cfg.SMTPPort), user, pass,
@@ -106,7 +106,7 @@ func (s *PostgresNotificationService) syncToLaravelTable(ctx context.Context, te
 			VALUES ($1, $2, $3, $4, NOW())
 			ON CONFLICT (team_id) DO UPDATE SET
 				discord_enabled = EXCLUDED.discord_enabled,
-				discord_webhook_url = COALESCE(EXCLUDED.discord_webhook_url, discord_notification_settings.discord_webhook_url),
+				discord_webhook_url = EXCLUDED.discord_webhook_url,
 				discord_ping_enabled = EXCLUDED.discord_ping_enabled,
 				updated_at = NOW()
 		`, teamID, cfg.Enabled, urlEnc, cfg.DiscordPingEnabled)
@@ -122,7 +122,7 @@ func (s *PostgresNotificationService) syncToLaravelTable(ctx context.Context, te
 			VALUES ($1, $2, $3, NOW())
 			ON CONFLICT (team_id) DO UPDATE SET
 				slack_enabled = EXCLUDED.slack_enabled,
-				slack_webhook_url = COALESCE(EXCLUDED.slack_webhook_url, slack_notification_settings.slack_webhook_url),
+				slack_webhook_url = EXCLUDED.slack_webhook_url,
 				updated_at = NOW()
 		`, teamID, cfg.Enabled, urlEnc)
 		return err
@@ -141,8 +141,8 @@ func (s *PostgresNotificationService) syncToLaravelTable(ctx context.Context, te
 			VALUES ($1, $2, $3, $4, NOW())
 			ON CONFLICT (team_id) DO UPDATE SET
 				telegram_enabled = EXCLUDED.telegram_enabled,
-				telegram_token = COALESCE(EXCLUDED.telegram_token, telegram_notification_settings.telegram_token),
-				telegram_chat_id = COALESCE(EXCLUDED.telegram_chat_id, telegram_notification_settings.telegram_chat_id),
+				telegram_token = EXCLUDED.telegram_token,
+				telegram_chat_id = EXCLUDED.telegram_chat_id,
 				updated_at = NOW()
 		`, teamID, cfg.Enabled, tokEnc, chatEnc)
 		return err
@@ -161,8 +161,8 @@ func (s *PostgresNotificationService) syncToLaravelTable(ctx context.Context, te
 			VALUES ($1, $2, $3, $4, NOW())
 			ON CONFLICT (team_id) DO UPDATE SET
 				pushover_enabled = EXCLUDED.pushover_enabled,
-				pushover_user_key = COALESCE(EXCLUDED.pushover_user_key, pushover_notification_settings.pushover_user_key),
-				pushover_api_token = COALESCE(EXCLUDED.pushover_api_token, pushover_notification_settings.pushover_api_token),
+				pushover_user_key = EXCLUDED.pushover_user_key,
+				pushover_api_token = EXCLUDED.pushover_api_token,
 				updated_at = NOW()
 		`, teamID, cfg.Enabled, userEnc, tokEnc)
 		return err
@@ -177,7 +177,7 @@ func (s *PostgresNotificationService) syncToLaravelTable(ctx context.Context, te
 			VALUES ($1, $2, $3, NOW())
 			ON CONFLICT (team_id) DO UPDATE SET
 				webhook_enabled = EXCLUDED.webhook_enabled,
-				webhook_url = COALESCE(EXCLUDED.webhook_url, webhook_notification_settings.webhook_url),
+				webhook_url = EXCLUDED.webhook_url,
 				updated_at = NOW()
 		`, teamID, cfg.Enabled, urlEnc)
 		return err

@@ -1,9 +1,69 @@
 # Coolify Standalone Migration Checkpoint & Verification Ledger
 
-> **2026-11-21 re-audit: full UX/UI and functional parity is NOT established.**
+> **2026-11-22 re-audit: full UX/UI and functional parity is NOT established.**
 > The completion claims in the historical checkpoint below describe its earlier
 > tests and inventory counts. They must not be used as evidence that every
 > original page, action, provider integration, or deployment path works identically.
+
+## Individual page restoration (2026-11-22, ongoing)
+
+The reported `/servers` and `/destinations` collision is now covered by real
+Chromium tests. Servers has its own list, search, table/grid controls and creation
+action. Destinations has its own list, create modal, UUID-specific general form,
+resources and confirmed deletion. Destination resources include applications,
+services, every standalone database type and secondary application attachments;
+the API rejects deleting an occupied destination.
+
+Projects, environments, the resource catalogue, resource configuration and
+credential/storage/source collections now have separate route identities and
+page components. Settings, team, profile, tags and shared-variable routes have
+initial independent pages. These are partial restorations: unfinished subpages
+explicitly indicate their state, and the remaining combined workspaces have
+not been certified as equivalent to the original.
+
+Notifications now open channel-specific forms and reload authorized saved values.
+Partial updates preserve omitted credentials, explicit clearing persists, and
+save/test operations reject a stale team. Resource controls use API-evaluated
+permissions; application/service actions honor inherited project/environment
+grants and the loaded resource's owning team. Read-only service responses omit
+sensitive Compose configuration.
+
+Docker Registries now has independent fleet and per-server screens. Login, test
+and logout run Docker commands over the managed server's SSH connection; a failed
+or ambiguous executor result cannot report success. Passwords travel through
+stdin, including multiline values, and non-root SSH users use sudo. Inventory
+still covers Go-managed records only, not pre-existing remote Docker credentials.
+
+Verified in this pass:
+
+- Chromium: **18 passed**, including distinct server/destination/registry pages,
+  destination create/edit/reload/delete, catalogue-based application/database
+  creation, backups, resource deep links, source creation, token revocation,
+  channel-specific notification save/reload, team isolation, search, logs/terminal,
+  mobile navigation and dashboard metadata. This does not exercise a real registry
+  over SSH or prove fresh-host application deployment.
+- Go: **77 passed, 1 skipped**, all 28 packages passed with isolated PostgreSQL/Redis. New tests cover
+  occupied and secondary destination protection, cross-team denial, environment
+  descriptions, chosen application destinations, inline Dockerfile persistence,
+  transfer of Dockerfile/environment descriptions, GitLab/Gitea edits, notification
+  hydration/clearing, inherited resource grants, and failed/confirmed registry
+  execution. Registry remote events are simulated; the real shell test verifies
+  byte-preserving password input and EOF handling. The skipped Go subprocess test
+  requires a Linux executor binary, which is not configured on this Windows host.
+- Frontend check/build and **14** Node contracts passed; Rust **10** tests passed.
+- Linux command regressions: **8 scenarios passed** across `update` and `upgrade`,
+  including chmod-only changes, content conflicts, failed fetches and failed builds.
+- Screenshots: `migration/receipts/screenshots/09-original-servers.png` and
+  `10-original-destinations.png` and `11-original-registries.png` are actual browser
+  captures, not generated mockups.
+
+Material remaining work includes private repository credential binding, fresh-host
+deployment generation, server connection/advanced settings and their runtime
+consumers, application healthchecks/limits, database configuration/rotation,
+notification event preferences/providers, remote Docker credential discovery,
+registry verification against a real SSH/Docker target, storage connection verification,
+provider-specific source settings, and the original auth/onboarding journeys.
+Persisting a form alone does not establish that its operational effect exists.
 
 ## Screenshot-based dashboard correction (2026-11-21)
 

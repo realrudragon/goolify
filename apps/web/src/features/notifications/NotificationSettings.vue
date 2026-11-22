@@ -1,157 +1,294 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import SettingsSection from '../../components/SettingsSection.vue';
 import { apiRequest } from '../../lib/api';
+import { loadSession, session } from '../../lib/session';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
-type ChannelKey = 'email' | 'discord' | 'slack' | 'telegram' | 'pushover' | 'webhook';
-
+const props = withDefaults(defineProps<{ channel?: string }>(), { channel: 'email' });
+interface Field {
+    key: string;
+    label: string;
+    type?: string;
+}
+const channels: Record<string, { title: string; helper: string; fields: Field[] }> = {
+    discord: {
+        title: 'Discord',
+        helper: 'Send team notifications to a Discord channel through an incoming webhook.',
+        fields: [{ key: 'webhook_url', label: 'Webhook URL', type: 'password' }],
+    },
+    slack: {
+        title: 'Slack',
+        helper: 'Send team notifications to a Slack channel through an incoming webhook.',
+        fields: [{ key: 'webhook_url', label: 'Webhook URL', type: 'password' }],
+    },
+    webhook: {
+        title: 'Webhook',
+        helper: 'Send team notifications to a custom webhook endpoint.',
+        fields: [{ key: 'webhook_url', label: 'Webhook URL', type: 'password' }],
+    },
+    telegram: {
+        title: 'Telegram',
+        helper: 'Send team notifications through your Telegram bot.',
+        fields: [
+            { key: 'bot_token', label: 'Bot Token', type: 'password' },
+            { key: 'chat_id', label: 'Chat ID' },
+        ],
+    },
+    pushover: {
+        title: 'Pushover',
+        helper: 'Send team notifications to your Pushover devices.',
+        fields: [
+            { key: 'pushover_user_key', label: 'User Key', type: 'password' },
+            { key: 'pushover_api_token', label: 'API Token', type: 'password' },
+        ],
+    },
+    email: {
+        title: 'Email',
+        helper: 'Configure email delivery for this team.',
+        fields: [
+            { key: 'smtp_host', label: 'Host' },
+            { key: 'smtp_port', label: 'Port', type: 'number' },
+            { key: 'smtp_username', label: 'Username' },
+            { key: 'smtp_password', label: 'Password', type: 'password' },
+            { key: 'smtp_from', label: 'From Address', type: 'email' },
+            { key: 'smtp_recipient', label: 'Recipients' },
+        ],
+    },
+};
+const channel = computed(() => channels[props.channel]);
 const lifecycle = usePageLifecycle();
-const selectedChannel = ref<ChannelKey>('webhook');
-const channels = ref<Record<ChannelKey, boolean>>({
-  email: false,
-  discord: false,
-  slack: false,
-  telegram: false,
-  pushover: false,
-  webhook: false,
-});
-
-const webhookUrl = ref('');
-const smtpHost = ref('');
-const smtpPort = ref(587);
-const smtpFrom = ref('');
-const smtpRecipient = ref('');
-const telegramToken = ref('');
-const telegramChatId = ref('');
-const pushoverUser = ref('');
-const pushoverToken = ref('');
+const config = ref<Record<string, any>>({ enabled: false });
+const initial = ref<Record<string, any>>({});
+let savedFields = new Set<string>();
+const teamId = ref<number | null>(null);
+const loading = ref(true);
+const saving = ref(false);
+const error = ref('');
 const status = ref('');
-
-async function loadConfigs() {
-  try {
-    const list = await apiRequest<Array<{ channel: string; enabled: boolean }>>('/api/v1/notifications', {
-      signal: lifecycle.signal,
-    });
-    for (const item of list) {
-      if (item.channel in channels.value) {
-        channels.value[item.channel as ChannelKey] = item.enabled;
-      }
+const canEdit = computed(
+    () =>
+        teamId.value !== null &&
+        ['admin', 'owner'].includes(
+            session.me?.teams.find((team) => team.id === teamId.value)?.role?.toLowerCase() ?? '',
+        ),
+);
+const dirty = computed(() => JSON.stringify(config.value) !== JSON.stringify(initial.value));
+let generation = 0;
+let controller: AbortController | undefined;
+lifecycle.registerCleanup(() => {
+    generation++;
+    controller?.abort();
+});
+async function load() {
+    const current = ++generation;
+    controller?.abort();
+    controller = new AbortController();
+    loading.value = true;
+    error.value = '';
+    config.value = { enabled: false };
+    teamId.value = null;
+    if (!channel.value) {
+        loading.value = false;
+        return;
     }
-  } catch {
-    // Ignore when unauthenticated
-  }
+    try {
+        await loadSession();
+        const saved = await apiRequest<Record<string, any>>(
+            `/api/v1/notifications/${props.channel}`,
+            { signal: controller.signal },
+        );
+        if (current !== generation || lifecycle.signal.aborted) return;
+        teamId.value = saved.team_id;
+        savedFields = new Set(Object.keys(saved));
+        const fields: Record<string, any> = { enabled: Boolean(saved.enabled) };
+        for (const field of channel.value.fields)
+            fields[field.key] =
+                saved[field.key] ?? (field.type === 'number' && canEdit.value ? 587 : '');
+        config.value = fields;
+        initial.value = { ...fields };
+    } catch (err) {
+        if (current === generation && !controller.signal.aborted)
+            error.value = (err as Error).message;
+    } finally {
+        if (current === generation) loading.value = false;
+    }
 }
-
-async function saveChannel() {
-  status.value = '';
-  const ch = selectedChannel.value;
-  const payload: Record<string, unknown> = { enabled: channels.value[ch] };
-  if (ch === 'webhook' || ch === 'discord' || ch === 'slack') {
-    payload.webhook_url = webhookUrl.value.trim();
-  } else if (ch === 'email') {
-    payload.smtp_enabled = channels.value.email;
-    payload.smtp_host = smtpHost.value.trim();
-    payload.smtp_port = smtpPort.value;
-    payload.smtp_from_address = smtpFrom.value.trim();
-    payload.smtp_recipients = smtpRecipient.value.trim();
-  } else if (ch === 'telegram') {
-    payload.telegram_enabled = channels.value.telegram;
-    payload.telegram_token = telegramToken.value.trim();
-    payload.telegram_chat_id = telegramChatId.value.trim();
-  } else if (ch === 'pushover') {
-    payload.pushover_enabled = channels.value.pushover;
-    payload.pushover_user_key = pushoverUser.value.trim();
-    payload.pushover_api_token = pushoverToken.value.trim();
-  }
-  try {
-    await apiRequest(`/api/v1/notifications/${ch}`, {
-      method: 'PATCH',
-      signal: lifecycle.signal,
-      body: JSON.stringify(payload),
-    });
-    status.value = `Saved ${ch} notification settings`;
-    await loadConfigs();
-  } catch (err) {
-    status.value = (err as Error).message;
-  }
+async function save() {
+    if (!canEdit.value || saving.value || !dirty.value || !channel.value) return;
+    saving.value = true;
+    error.value = '';
+    status.value = '';
+    try {
+        const changed = Object.fromEntries(
+            Object.entries(config.value).filter(
+                ([key, value]) => value !== initial.value[key] || !savedFields.has(key),
+            ),
+        );
+        await apiRequest(`/api/v1/notifications/${props.channel}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ ...changed, expected_team_id: teamId.value }),
+        });
+        await load();
+        if (!error.value) status.value = 'Saved.';
+    } catch (err) {
+        error.value = (err as Error).message;
+    } finally {
+        saving.value = false;
+    }
 }
-
 async function sendTest() {
-  status.value = '';
-  try {
-    await apiRequest('/api/v1/notifications/test', {
-      method: 'POST',
-      signal: lifecycle.signal,
-      body: JSON.stringify({ channel: selectedChannel.value, event: 'test', summary: 'Goolify live test' }),
-    });
-    status.value = `Test notification delivered via ${selectedChannel.value}`;
-  } catch (err) {
-    status.value = (err as Error).message;
-  }
+    if (!canEdit.value || saving.value || dirty.value || !config.value.enabled) return;
+    saving.value = true;
+    error.value = '';
+    status.value = '';
+    try {
+        await apiRequest('/api/v1/notifications/test', {
+            method: 'POST',
+            body: JSON.stringify({
+                channel: props.channel,
+                event: 'test',
+                summary: 'Goolify test notification',
+                expected_team_id: teamId.value,
+            }),
+        });
+        status.value = 'Test notification sent.';
+    } catch (err) {
+        error.value = (err as Error).message;
+    } finally {
+        saving.value = false;
+    }
 }
-
 lifecycle.onTeamSwitch(() => {
-  for (const k of Object.keys(channels.value) as ChannelKey[]) channels.value[k] = false;
-  webhookUrl.value = '';
-  status.value = '';
-  void loadConfigs();
+    status.value = '';
+    void load();
 });
-
-onMounted(() => {
-  void loadConfigs();
-});
+watch(
+    () => props.channel,
+    () => {
+        status.value = '';
+        void load();
+    },
+);
+onMounted(load);
 </script>
 
 <template>
-  <form class="coolify-card" data-testid="notification-settings" @submit.prevent="saveChannel">
-    <div class="coolify-well" style="display:grid;gap:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <strong>Notifications (6 Laravel-Compatible Channels)</strong>
-        <select v-model="selectedChannel" class="coolify-input" aria-label="Notification channel">
-          <option value="webhook">Webhook</option>
-          <option value="discord">Discord</option>
-          <option value="slack">Slack</option>
-          <option value="email">Email (SMTP / Resend)</option>
-          <option value="telegram">Telegram</option>
-          <option value="pushover">Pushover</option>
-        </select>
-      </div>
-
-      <div style="display:flex;flex-wrap:wrap;gap:12px;">
-        <label><input v-model="channels.email" type="checkbox" /> Email</label>
-        <label><input v-model="channels.discord" type="checkbox" /> Discord</label>
-        <label><input v-model="channels.slack" type="checkbox" /> Slack</label>
-        <label><input v-model="channels.telegram" type="checkbox" /> Telegram</label>
-        <label><input v-model="channels.pushover" type="checkbox" /> Pushover</label>
-        <label><input v-model="channels.webhook" type="checkbox" /> Webhook</label>
-      </div>
-
-      <div v-if="selectedChannel === 'webhook' || selectedChannel === 'discord' || selectedChannel === 'slack'" style="display:flex;gap:8px;">
-        <input v-model="webhookUrl" class="coolify-input" style="flex:1;" placeholder="Webhook URL (https://...)" aria-label="Webhook URL" />
-      </div>
-
-      <div v-else-if="selectedChannel === 'email'" style="display:flex;gap:8px;flex-wrap:wrap;">
-        <input v-model="smtpHost" class="coolify-input" placeholder="SMTP Host" />
-        <input v-model.number="smtpPort" type="number" class="coolify-input" style="width:90px;" placeholder="Port" />
-        <input v-model="smtpFrom" class="coolify-input" placeholder="From address" />
-        <input v-model="smtpRecipient" class="coolify-input" placeholder="Recipients" />
-      </div>
-
-      <div v-else-if="selectedChannel === 'telegram'" style="display:flex;gap:8px;flex-wrap:wrap;">
-        <input v-model="telegramToken" type="password" class="coolify-input" placeholder="Bot Token" />
-        <input v-model="telegramChatId" class="coolify-input" placeholder="Chat ID" />
-      </div>
-
-      <div v-else-if="selectedChannel === 'pushover'" style="display:flex;gap:8px;flex-wrap:wrap;">
-        <input v-model="pushoverUser" class="coolify-input" placeholder="Pushover User Key" />
-        <input v-model="pushoverToken" type="password" class="coolify-input" placeholder="Pushover API Token" />
-      </div>
-
-      <div style="display:flex;gap:8px;">
-        <button type="submit" class="coolify-btn coolify-btn-primary">Save Channel</button>
-        <button type="button" class="coolify-btn" @click="sendTest">Send Real Test</button>
-      </div>
-      <p v-if="status" role="status" style="margin:0;">{{ status }}</p>
-    </div>
-  </form>
+    <section
+        class="original-page"
+        data-testid="notification-settings"
+        :data-channel="channel ? props.channel : undefined"
+    >
+        <header class="notification-mobile-heading">
+            <h1>Notifications</h1>
+            <p>Configure how your team receives deployment and system alerts.</p>
+        </header>
+        <p
+            v-if="!channel"
+            role="alert"
+            class="page-error"
+        >
+            Notification channel not found.
+        </p>
+        <p
+            v-if="error"
+            role="alert"
+            class="page-error"
+        >
+            {{ error }}
+        </p>
+        <p
+            v-if="status"
+            role="status"
+        >
+            {{ status }}
+        </p>
+        <p
+            v-if="loading"
+            role="status"
+            class="page-muted"
+        >
+            Loading notification settings…
+        </p>
+        <form
+            v-else-if="channel"
+            @submit.prevent="save"
+        >
+            <div
+                v-if="dirty && canEdit"
+                class="unsaved-bar"
+            >
+                <span>You have unsaved changes</span>
+                <div class="page-actions">
+                    <button
+                        type="button"
+                        class="coolify-btn"
+                        @click="load"
+                    >
+                        Discard</button
+                    ><button
+                        type="submit"
+                        class="coolify-btn coolify-btn-primary"
+                        :disabled="saving"
+                    >
+                        Save
+                    </button>
+                </div>
+            </div>
+            <SettingsSection
+                :title="channel.title"
+                :helper="channel.helper"
+            >
+                <template #actions
+                    ><label class="check-field"
+                        ><input
+                            v-model="config.enabled"
+                            type="checkbox"
+                            :disabled="!canEdit || saving"
+                            aria-label="Enabled"
+                        />Enabled</label
+                    ><button
+                        v-if="canEdit"
+                        type="button"
+                        class="coolify-btn"
+                        :disabled="saving || dirty || !config.enabled"
+                        :title="
+                            dirty ? 'Save changes before sending a test notification' : undefined
+                        "
+                        @click="sendTest"
+                    >
+                        Send test notification
+                    </button></template
+                >
+                <div class="form-grid">
+                    <label
+                        v-for="field in channel.fields"
+                        :key="field.key"
+                        class="form-field"
+                        :class="{ 'full-span': channel.fields.length === 1 }"
+                        >{{ field.label
+                        }}<input
+                            v-if="field.type === 'number'"
+                            v-model.number="config[field.key]"
+                            type="number"
+                            min="1"
+                            max="65535"
+                            class="coolify-input"
+                            :readonly="!canEdit"
+                            :aria-label="field.label" /><input
+                            v-else
+                            v-model="config[field.key]"
+                            :type="field.type ?? 'text'"
+                            class="coolify-input"
+                            :readonly="!canEdit"
+                            :aria-label="field.label"
+                            :placeholder="
+                                !canEdit && field.type === 'password' ? 'Hidden' : undefined
+                            "
+                            autocomplete="off"
+                    /></label>
+                </div>
+            </SettingsSection>
+        </form>
+    </section>
 </template>

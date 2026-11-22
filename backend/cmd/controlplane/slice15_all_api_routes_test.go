@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/coollabsio/coolify/backend/internal/executor"
 )
 
 // TestProductionSlice15_ExhaustiveAPIv1RouteMatrixParity exercises every remaining implemented
@@ -15,7 +17,7 @@ import (
 // HTTP mock upstream servers (Hetzner/Vultr/DO/Hostinger/Cloudflare/GitHub/S3), proving
 // zero 404/405/500 regressions and strict cross-team / member authorization.
 func TestProductionSlice15_ExhaustiveAPIv1RouteMatrixParity(t *testing.T) {
-	_, ts, pool, _, ciph := setupRealControlPlane(t)
+	app, ts, pool, _, ciph := setupRealControlPlane(t)
 	ctx := context.Background()
 
 	// Real local HTTP upstream server for cloud providers, DNS, S3, and GitHub API calls
@@ -279,10 +281,14 @@ func TestProductionSlice15_ExhaustiveAPIv1RouteMatrixParity(t *testing.T) {
 	assertStatus("srv-validate-get", http.MethodGet, "/api/v1/servers/localhost/validate", nil, http.StatusOK, http.StatusAccepted)
 	assertStatus("srv-validate-post", http.MethodPost, "/api/v1/servers/localhost/validate", nil, http.StatusOK, http.StatusAccepted)
 	assertStatus("srv-hostkey-reset", http.MethodPost, "/api/v1/servers/localhost/host-key/reset", nil, http.StatusOK)
+	// This route matrix simulates SSH completion; dedicated registry tests cover failures.
+	previousExecutor := app.Executor
+	app.Executor = executor.NewClient(&sliceTestTransport{})
 	assertStatus("srv-reg-post", http.MethodPost, "/api/v1/servers/localhost/registries", map[string]any{"registry": "ghcr.io", "username": "u", "password": "p"}, http.StatusCreated, http.StatusOK)
 	assertStatus("srv-reg-get", http.MethodGet, "/api/v1/servers/localhost/registries", nil, http.StatusOK)
 	assertStatus("srv-reg-check", http.MethodPost, "/api/v1/servers/localhost/registries/ghcr.io/check", nil, http.StatusOK)
 	assertStatus("srv-reg-del", http.MethodDelete, "/api/v1/servers/localhost/registries/ghcr.io", nil, http.StatusOK)
+	app.Executor = previousExecutor
 	assertStatus("srv-proxy-get", http.MethodGet, "/api/v1/servers/localhost/proxy", nil, http.StatusOK)
 	assertStatus("srv-proxy-patch", http.MethodPatch, "/api/v1/servers/localhost/proxy", map[string]any{"type": "TRAEFIK"}, http.StatusOK)
 	assertStatus("srv-proxy-restart", http.MethodPost, "/api/v1/servers/localhost/proxy/restart", nil, http.StatusOK, http.StatusAccepted)

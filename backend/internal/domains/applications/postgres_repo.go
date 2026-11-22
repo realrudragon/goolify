@@ -23,6 +23,7 @@ var (
 )
 
 type Application struct {
+	Dockerfile              string            `json:"dockerfile,omitempty"`
 	ID                      int64             `json:"id"`
 	UUID                    string            `json:"uuid"`
 	Name                    string            `json:"name"`
@@ -50,6 +51,8 @@ type Application struct {
 }
 
 type CreateApplicationInput struct {
+	Dockerfile              string            `json:"dockerfile"`
+	DestinationUUID         string            `json:"destination_uuid"`
 	Name                    string            `json:"name"`
 	Description             string            `json:"description"`
 	ProjectUUID             string            `json:"project_uuid,omitempty"`
@@ -92,17 +95,17 @@ type EnvVarDTO struct {
 }
 
 type DeploymentRecord struct {
-	DeploymentUUID string    `json:"deployment_uuid"`
-	OperationID    string    `json:"operation_id"`
-	ApplicationID  int64     `json:"application_id"`
-	ApplicationUUID string   `json:"application_uuid"`
-	ServerUUID     string    `json:"server_uuid"`
-	Status         string    `json:"status"`
-	ForceRebuild   bool      `json:"force_rebuild"`
-	IsWebhook      bool      `json:"is_webhook"`
-	IsAPI          bool      `json:"is_api"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	DeploymentUUID  string    `json:"deployment_uuid"`
+	OperationID     string    `json:"operation_id"`
+	ApplicationID   int64     `json:"application_id"`
+	ApplicationUUID string    `json:"application_uuid"`
+	ServerUUID      string    `json:"server_uuid"`
+	Status          string    `json:"status"`
+	ForceRebuild    bool      `json:"force_rebuild"`
+	IsWebhook       bool      `json:"is_webhook"`
+	IsAPI           bool      `json:"is_api"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // PostgresService manages Applications, encrypted EnvironmentVariables, DeploymentContext loading,
@@ -307,7 +310,7 @@ func (s *PostgresService) ListByTeam(ctx context.Context, principal auth.Princip
 		       COALESCE(a.docker_registry_image_name, ''), COALESCE(a.docker_registry_image_tag, ''),
 		       COALESCE(a.dockerfile_location, ''), COALESCE(a.ports_exposes, ''), a.status,
 		       a.environment_id, e.uuid, p.uuid, p.team_id, a.destination_id,
-		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'), a.updated_at
+		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'), a.updated_at, COALESCE(a.dockerfile,'')
 		FROM applications a
 		JOIN environments e ON e.id = a.environment_id
 		JOIN projects p ON p.id = e.project_id
@@ -329,7 +332,7 @@ func (s *PostgresService) ListByTeam(ctx context.Context, principal auth.Princip
 			&a.DockerRegistryImageName, &a.DockerRegistryImageTag,
 			&a.DockerfileLocation, &a.PortsExposes, &a.Status,
 			&a.EnvironmentID, &a.EnvironmentUUID, &a.ProjectUUID, &a.TeamID, &a.DestinationID,
-			&a.ServerID, &a.ServerUUID, &a.UpdatedAt,
+			&a.ServerID, &a.ServerUUID, &a.UpdatedAt, &a.Dockerfile,
 		); err != nil {
 			return nil, err
 		}
@@ -370,7 +373,7 @@ func (s *PostgresService) loadByUUID(ctx context.Context, uuid string) (Applicat
 		       COALESCE(a.docker_registry_image_name, ''), COALESCE(a.docker_registry_image_tag, ''),
 		       COALESCE(a.dockerfile_location, ''), COALESCE(a.docker_compose_raw, ''), COALESCE(a.ports_exposes, ''),
 		       a.status, a.environment_id, e.uuid, p.uuid, p.team_id, a.destination_id,
-		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'), a.updated_at
+		       COALESCE(sd.server_id, 0), COALESCE(srv.uuid, 'localhost'), a.updated_at, COALESCE(a.dockerfile,'')
 		FROM applications a
 		JOIN environments e ON e.id = a.environment_id
 		JOIN projects p ON p.id = e.project_id
@@ -383,7 +386,7 @@ func (s *PostgresService) loadByUUID(ctx context.Context, uuid string) (Applicat
 		&a.DockerRegistryImageName, &a.DockerRegistryImageTag,
 		&a.DockerfileLocation, &a.DockerComposeRaw, &a.PortsExposes,
 		&a.Status, &a.EnvironmentID, &a.EnvironmentUUID, &a.ProjectUUID, &a.TeamID, &a.DestinationID,
-		&a.ServerID, &a.ServerUUID, &a.UpdatedAt,
+		&a.ServerID, &a.ServerUUID, &a.UpdatedAt, &a.Dockerfile,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Application{}, ErrNotFound
@@ -698,6 +701,11 @@ func (s *PostgresService) Create(ctx context.Context, principal auth.Principal, 
 	if srvTeamID != projTeamID {
 		return Application{}, fmt.Errorf("%w: cross-team server placement denied", access.ErrForbidden)
 	}
+	if in.DestinationUUID != "" {
+		if err := s.pool.QueryRow(ctx, `SELECT id FROM standalone_dockers WHERE uuid=$1 AND server_id=$2`, strings.TrimSpace(in.DestinationUUID), srvID).Scan(&destID); err != nil {
+			return Application{}, errors.New("destination does not belong to the target server")
+		}
+	}
 	if err := s.authz.Check(ctx, principal, access.ActionPlaceResource, access.ResourceRef{
 		Type: "server", ID: srvID, UUID: serverUUID, TeamID: &srvTeamID, IsLocalhost: srvID == 0, APISegment: "servers",
 	}); err != nil {
@@ -732,14 +740,14 @@ func (s *PostgresService) Create(ctx context.Context, principal auth.Principal, 
 			uuid, name, description, fqdn, git_repository, git_branch, build_pack,
 			docker_registry_image_name, docker_registry_image_tag, dockerfile_location,
 			docker_compose_raw, ports_exposes, status, environment_id, destination_id,
-			manual_webhook_secret_github
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'exited',$13,$14,$15)
+			manual_webhook_secret_github, dockerfile
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'exited',$13,$14,$15,$16)
 		RETURNING id, updated_at
 	`, row.UUID, name, compat.SanitizeString(in.Description), strings.TrimSpace(in.FQDN),
 		strings.TrimSpace(in.GitRepository), branch, bp,
 		strings.TrimSpace(in.DockerRegistryImageName), strings.TrimSpace(in.DockerRegistryImageTag),
 		strings.TrimSpace(in.DockerfileLocation), in.DockerComposeRaw, strings.TrimSpace(in.PortsExposes),
-		envID, destID, in.WebhookSecretGitHub,
+		envID, destID, in.WebhookSecretGitHub, in.Dockerfile,
 	).Scan(&appID, &updatedAt)
 	if err != nil {
 		return Application{}, err

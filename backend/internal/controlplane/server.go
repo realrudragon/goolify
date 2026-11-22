@@ -33,6 +33,7 @@ import (
 	"github.com/coollabsio/coolify/backend/internal/realtime"
 	goredis "github.com/coollabsio/coolify/backend/internal/store/redis"
 	"github.com/coollabsio/coolify/backend/internal/web"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -59,14 +60,14 @@ type App struct {
 	Authenticator *auth.Authenticator
 	AuthRepo      *auth.PostgresAuthRepository
 
-	Outbox       *realtime.PostgresOutboxStore
-	Cache        *realtime.RedisCacheCoherence
-	Hub          *realtime.RealtimeHub
-	Dispatcher   *realtime.PostgresDispatcher
-	LogStore     *realtime.PostgresLogStore
-	Tickets      *realtime.PostgresTerminalTicketStore
-	JobCoord     *jobs.PostgresJobCoordinator
-	Executor     *executor.Client
+	Outbox     *realtime.PostgresOutboxStore
+	Cache      *realtime.RedisCacheCoherence
+	Hub        *realtime.RealtimeHub
+	Dispatcher *realtime.PostgresDispatcher
+	LogStore   *realtime.PostgresLogStore
+	Tickets    *realtime.PostgresTerminalTicketStore
+	JobCoord   *jobs.PostgresJobCoordinator
+	Executor   *executor.Client
 
 	ServerRepo   *servers.PostgresRepository
 	ServerSvc    *servers.ServerService
@@ -202,6 +203,7 @@ func (a *App) registerRoutes(staticFS fs.FS) {
 	a.mux.HandleFunc("/api/v1/servers/", a.requireAPIAuth(a.withExtendedServerRoutes(a.handleServers)))
 	a.mux.HandleFunc("/api/v1/destinations", a.requireAPIAuth(a.handleDestinations))
 	a.mux.HandleFunc("/api/v1/destinations/", a.requireAPIAuth(a.handleDestinations))
+	a.mux.HandleFunc("/api/v1/resource-permissions", a.requireAPIAuth(a.handleUIResourcePermissions))
 	a.mux.HandleFunc("/api/v1/security/keys", a.requireAPIAuth(a.handlePrivateKeys))
 	a.mux.HandleFunc("/api/v1/security/keys/", a.requireAPIAuth(a.handlePrivateKeys))
 	a.mux.HandleFunc("/api/v1/projects", a.requireAPIAuth(a.handleProjects))
@@ -632,8 +634,8 @@ func (a *App) handleServers(w http.ResponseWriter, r *http.Request, p auth.Princ
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/servers"), "/")
 	if trimmed == "import" && r.Method == http.MethodPost {
 		var body struct {
-			TargetTeamID *int64                       `json:"target_team_id"`
-			Bundle       transfer.FullTransferBundle  `json:"bundle"`
+			TargetTeamID *int64                      `json:"target_team_id"`
+			Bundle       transfer.FullTransferBundle `json:"bundle"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid transfer bundle"})
@@ -961,13 +963,14 @@ func (a *App) handleProjects(w http.ResponseWriter, r *http.Request, p auth.Prin
 			writeJSON(w, http.StatusOK, envs)
 		case http.MethodPost:
 			var body struct {
-				Name string `json:"name"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid environment payload"})
 				return
 			}
-			env, err := a.ProjectSvc.CreateEnvironment(r.Context(), p, projUUID, body.Name)
+			env, err := a.ProjectSvc.CreateEnvironment(r.Context(), p, projUUID, body.Name, body.Description)
 			if err != nil {
 				writeDomainError(w, err)
 				return
@@ -1176,7 +1179,7 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 		}
 		tid := appRec.TeamID
 		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, access.ResourceRef{
-			Type: "application", ID: appRec.ID, UUID: appRec.UUID, TeamID: &tid, APISegment: "applications",
+			Type: "application", ID: appRec.ID, UUID: appRec.UUID, ProjectUUID: appRec.ProjectUUID, EnvironmentUUID: appRec.EnvironmentUUID, ServerID: &appRec.ServerID, TeamID: &tid, APISegment: "applications",
 		}); err != nil {
 			writeDomainError(w, err)
 			return
@@ -1237,7 +1240,7 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 		}
 		tid := appRec.TeamID
 		if err := a.Authz.Check(r.Context(), p, access.ActionDeploy, access.ResourceRef{
-			Type: "application", ID: appRec.ID, UUID: appRec.UUID, TeamID: &tid, APISegment: "applications",
+			Type: "application", ID: appRec.ID, UUID: appRec.UUID, ProjectUUID: appRec.ProjectUUID, EnvironmentUUID: appRec.EnvironmentUUID, ServerID: &appRec.ServerID, TeamID: &tid, APISegment: "applications",
 		}); err != nil {
 			writeDomainError(w, err)
 			return
@@ -1276,7 +1279,7 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 		}
 		tid := appRec.TeamID
 		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, access.ResourceRef{
-			Type: "application", ID: appRec.ID, UUID: appRec.UUID, TeamID: &tid, APISegment: "applications",
+			Type: "application", ID: appRec.ID, UUID: appRec.UUID, ProjectUUID: appRec.ProjectUUID, EnvironmentUUID: appRec.EnvironmentUUID, ServerID: &appRec.ServerID, TeamID: &tid, APISegment: "applications",
 		}); err != nil {
 			writeDomainError(w, err)
 			return
@@ -1322,7 +1325,7 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 		}
 		tid := appRec.TeamID
 		if err := a.Authz.Check(r.Context(), p, access.ActionDelete, access.ResourceRef{
-			Type: "application", ID: appRec.ID, UUID: appRec.UUID, TeamID: &tid, APISegment: "applications",
+			Type: "application", ID: appRec.ID, UUID: appRec.UUID, ProjectUUID: appRec.ProjectUUID, EnvironmentUUID: appRec.EnvironmentUUID, ServerID: &appRec.ServerID, TeamID: &tid, APISegment: "applications",
 		}); err != nil {
 			writeDomainError(w, err)
 			return
@@ -1564,6 +1567,14 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 		return
 	}
 	svcUUID := parts[0]
+	meta, metaErr := a.loadResourceMeta(r.Context(), "service", svcUUID)
+	if metaErr != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "service not found"})
+		return
+	}
+	serviceRef := meta.TeamScopedRef
+	serviceRef.ServerID = &meta.ServerID
+
 	if len(parts) >= 2 && parts[1] == "storages" {
 		var sid, tid int64
 		if err := a.Pool.QueryRow(r.Context(), `
@@ -1607,9 +1618,7 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "service not found"})
 			return
 		}
-		if err := a.Authz.Check(r.Context(), p, access.ActionDeploy, access.ResourceRef{
-			Type: "service", ID: sid, UUID: svcUUID, TeamID: &tid, APISegment: "services",
-		}); err != nil {
+		if err := a.Authz.Check(r.Context(), p, access.ActionDeploy, serviceRef); err != nil {
 			writeDomainError(w, err)
 			return
 		}
@@ -1622,18 +1631,15 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 		return
 	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
-		list, err := a.ServiceSvc.ListByTeam(r.Context(), p, activeTeamForPrincipal(p))
-		if err == nil {
-			for _, s := range list {
-				if s.UUID == svcUUID {
-					writeJSON(w, http.StatusOK, s)
-					return
-				}
-			}
+		svc, err := a.ServiceSvc.GetByUUID(r.Context(), p, svcUUID)
+		if err != nil {
+			writeDomainError(w, err)
+			return
 		}
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "service not found"})
+		writeJSON(w, http.StatusOK, svc)
 		return
 	}
+
 	if len(parts) == 1 && r.Method == http.MethodDelete {
 		var sid, tid int64
 		if err := a.Pool.QueryRow(r.Context(), `
@@ -1645,9 +1651,7 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "service not found"})
 			return
 		}
-		if err := a.Authz.Check(r.Context(), p, access.ActionDelete, access.ResourceRef{
-			Type: "service", ID: sid, UUID: svcUUID, TeamID: &tid, APISegment: "services",
-		}); err != nil {
+		if err := a.Authz.Check(r.Context(), p, access.ActionDelete, serviceRef); err != nil {
 			writeDomainError(w, err)
 			return
 		}
@@ -1677,9 +1681,7 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "service not found"})
 			return
 		}
-		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, access.ResourceRef{
-			Type: "service", ID: sid, UUID: svcUUID, TeamID: &tid, APISegment: "services",
-		}); err != nil {
+		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, serviceRef); err != nil {
 			writeDomainError(w, err)
 			return
 		}
@@ -1804,7 +1806,7 @@ func (a *App) handleDatabases(w http.ResponseWriter, r *http.Request, p auth.Pri
 		}
 		tid := db.TeamID
 		if err := a.Authz.Check(r.Context(), p, access.ActionDeploy, access.ResourceRef{
-			Type: "database", ID: db.ID, UUID: db.UUID, TeamID: &tid, APISegment: "databases",
+			Type: "database", ID: db.ID, UUID: db.UUID, ProjectUUID: db.ProjectUUID, EnvironmentUUID: db.EnvironmentUUID, TeamID: &tid, APISegment: "databases",
 		}); err != nil {
 			writeDomainError(w, err)
 			return
@@ -2189,8 +2191,39 @@ func (a *App) handleNotifications(w http.ResponseWriter, r *http.Request, p auth
 		return
 	}
 	if r.Method == http.MethodPut || r.Method == http.MethodPost {
-		var cfg notifications.ChannelConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		var raw json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid notification config"})
+			return
+		}
+		var body struct {
+			Channel        notifications.ChannelKind `json:"channel"`
+			ExpectedTeamID *int64                    `json:"expected_team_id"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid notification config"})
+			return
+		}
+		switch body.Channel {
+		case notifications.ChannelEmail, notifications.ChannelDiscord, notifications.ChannelSlack, notifications.ChannelTelegram, notifications.ChannelPushover, notifications.ChannelWebhook:
+		default:
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "unsupported notification channel"})
+			return
+		}
+		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, access.ResourceRef{Type: "team", ID: teamID, TeamID: &teamID, APISegment: "notifications"}); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		if body.ExpectedTeamID != nil && *body.ExpectedTeamID != teamID {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "The active team changed. Reload this page before saving."})
+			return
+		}
+		cfg, err := a.NotifySvc.LoadConfig(r.Context(), teamID, body.Channel)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			writeDomainError(w, err)
+			return
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid notification config"})
 			return
 		}
@@ -2217,12 +2250,17 @@ func (a *App) handleNotificationTest(w http.ResponseWriter, r *http.Request, p a
 		return
 	}
 	var body struct {
-		Channel notifications.ChannelKind `json:"channel"`
-		Event   string                    `json:"event"`
-		Summary string                    `json:"summary"`
+		Channel        notifications.ChannelKind `json:"channel"`
+		Event          string                    `json:"event"`
+		Summary        string                    `json:"summary"`
+		ExpectedTeamID *int64                    `json:"expected_team_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid test notification payload"})
+		return
+	}
+	if body.ExpectedTeamID != nil && *body.ExpectedTeamID != teamID {
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "The active team changed. Reload this page before sending a test notification."})
 		return
 	}
 	if body.Event == "" {

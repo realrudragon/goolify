@@ -371,15 +371,15 @@ func (a *App) handleServerLogDrains(w http.ResponseWriter, r *http.Request, p au
 			return
 		}
 		var body struct {
-			AxiomEnabled      *bool   `json:"is_logdrain_axiom_enabled"`
-			AxiomDataset      *string `json:"logdrain_axiom_dataset_name"`
-			AxiomAPIKey       *string `json:"logdrain_axiom_api_key"`
-			NewRelicEnabled   *bool   `json:"is_logdrain_newrelic_enabled"`
-			NewRelicKey       *string `json:"logdrain_newrelic_license_key"`
-			NewRelicURI       *string `json:"logdrain_newrelic_base_uri"`
-			CustomEnabled     *bool   `json:"is_logdrain_custom_enabled"`
-			CustomConfig      *string `json:"logdrain_custom_config"`
-			CustomParser      *string `json:"logdrain_custom_config_parser"`
+			AxiomEnabled    *bool   `json:"is_logdrain_axiom_enabled"`
+			AxiomDataset    *string `json:"logdrain_axiom_dataset_name"`
+			AxiomAPIKey     *string `json:"logdrain_axiom_api_key"`
+			NewRelicEnabled *bool   `json:"is_logdrain_newrelic_enabled"`
+			NewRelicKey     *string `json:"logdrain_newrelic_license_key"`
+			NewRelicURI     *string `json:"logdrain_newrelic_base_uri"`
+			CustomEnabled   *bool   `json:"is_logdrain_custom_enabled"`
+			CustomConfig    *string `json:"logdrain_custom_config"`
+			CustomParser    *string `json:"logdrain_custom_config_parser"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid log drains payload"})
@@ -431,11 +431,11 @@ func (a *App) serveLogDrains(w http.ResponseWriter, r *http.Request, p auth.Prin
 		FROM server_settings WHERE server_id = $1
 	`, m.ID).Scan(&axOn, &axDS, &axKey, &nrOn, &nrKey, &nrURI, &cuOn, &cuCfg, &cuParser)
 	resp := map[string]any{
-		"is_logdrain_axiom_enabled":    axOn,
-		"logdrain_axiom_dataset_name":  axDS,
-		"is_logdrain_newrelic_enabled": nrOn,
-		"logdrain_newrelic_base_uri":   nrURI,
-		"is_logdrain_custom_enabled":   cuOn,
+		"is_logdrain_axiom_enabled":     axOn,
+		"logdrain_axiom_dataset_name":   axDS,
+		"is_logdrain_newrelic_enabled":  nrOn,
+		"logdrain_newrelic_base_uri":    nrURI,
+		"is_logdrain_custom_enabled":    cuOn,
 		"logdrain_custom_config_parser": cuParser,
 	}
 	if a.Authz.Check(r.Context(), p, access.ActionReadSensitive, m.Ref) == nil {
@@ -703,9 +703,21 @@ func (a *App) handleServerRegistries(w http.ResponseWriter, r *http.Request, p a
 				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "registry and username are required."})
 				return
 			}
-			encPass, _ := a.encryptSecretString(body.Password)
+			if strings.HasPrefix(strings.TrimSpace(body.Registry), "-") || body.Password == "" {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "registry and password are required"})
+				return
+			}
+			if err := a.runRegistryCommand(r.Context(), m, registryLoginCommand(strings.TrimSpace(body.Registry), body.Username), registryPasswordInput(body.Password)); err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]string{"message": err.Error()})
+				return
+			}
+			encPass, err := a.encryptSecretString(body.Password)
+			if err != nil {
+				writeDomainError(w, err)
+				return
+			}
 			u := a.Hooks.NewCUID2()
-			err := a.Pool.QueryRow(r.Context(), `
+			err = a.Pool.QueryRow(r.Context(), `
 				INSERT INTO go_server_registries (uuid, server_id, registry, username, password_encrypted, verified, last_checked_at)
 				VALUES ($1,$2,$3,$4,$5,TRUE,NOW())
 				ON CONFLICT (server_id, registry) DO UPDATE SET username = EXCLUDED.username, password_encrypted = EXCLUDED.password_encrypted, verified = TRUE, last_checked_at = NOW(), updated_at = NOW()
@@ -732,9 +744,23 @@ func (a *App) handleServerRegistries(w http.ResponseWriter, r *http.Request, p a
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Server has been transferred away; remote commands are disabled."})
 			return
 		}
-		tag, _ := a.Pool.Exec(r.Context(), `UPDATE go_server_registries SET verified = TRUE, last_checked_at = NOW() WHERE server_id = $1 AND (registry = $2 OR uuid = $2)`, m.ID, regKey)
+		var registry, username, password string
+		if err := a.Pool.QueryRow(r.Context(), `SELECT registry,username,password_encrypted FROM go_server_registries WHERE server_id=$1 AND (registry=$2 OR uuid=$2)`, m.ID, regKey).Scan(&registry, &username, &password); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		runErr := a.runRegistryCommand(r.Context(), m, registryLoginCommand(registry, username), registryPasswordInput(a.decryptSecretString(password)))
+		tag, err := a.Pool.Exec(r.Context(), `UPDATE go_server_registries SET verified = $3, last_checked_at = NOW() WHERE server_id = $1 AND (registry = $2 OR uuid = $2)`, m.ID, regKey, runErr == nil)
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
 		if tag.RowsAffected() == 0 {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "registry login not found"})
+			return
+		}
+		if runErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"message": runErr.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"registry": regKey, "verified": true})
@@ -746,7 +772,24 @@ func (a *App) handleServerRegistries(w http.ResponseWriter, r *http.Request, p a
 			writeDomainError(w, err)
 			return
 		}
-		tag, _ := a.Pool.Exec(r.Context(), `DELETE FROM go_server_registries WHERE server_id = $1 AND (registry = $2 OR uuid = $2)`, m.ID, regKey)
+		if m.TransferredAt != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Server has been transferred away; remote commands are disabled."})
+			return
+		}
+		var registry string
+		if err := a.Pool.QueryRow(r.Context(), `SELECT registry FROM go_server_registries WHERE server_id=$1 AND (registry=$2 OR uuid=$2)`, m.ID, regKey).Scan(&registry); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		if err := a.runRegistryCommand(r.Context(), m, "docker logout "+shellSingleQuote(registry), ""); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"message": err.Error()})
+			return
+		}
+		tag, err := a.Pool.Exec(r.Context(), `DELETE FROM go_server_registries WHERE server_id = $1 AND (registry = $2 OR uuid = $2)`, m.ID, regKey)
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
 		if tag.RowsAffected() == 0 {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "registry not found"})
 			return
@@ -822,11 +865,11 @@ func (a *App) handleServerTransferExtended(w http.ResponseWriter, r *http.Reques
 		var status, targetURL string
 		_ = a.Pool.QueryRow(r.Context(), `SELECT COALESCE(transfer_status,'idle'), COALESCE(transferred_to_url,'') FROM servers WHERE id = $1`, m.ID).Scan(&status, &targetURL)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"server_uuid":      m.UUID,
-			"is_transferred":   m.TransferredAt != nil,
-			"transferred_at":   m.TransferredAt,
-			"transfer_status":  status,
-			"transferred_to":   targetURL,
+			"server_uuid":     m.UUID,
+			"is_transferred":  m.TransferredAt != nil,
+			"transferred_at":  m.TransferredAt,
+			"transfer_status": status,
+			"transferred_to":  targetURL,
 		})
 		return
 	}

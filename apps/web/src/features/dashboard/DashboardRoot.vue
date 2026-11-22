@@ -27,6 +27,14 @@ import ApiTokenManager from '../auth/ApiTokenManager.vue';
 import SourcesAndCloudPanel from '../integrations/SourcesAndCloudPanel.vue';
 import SecurityAndVulnPanel from '../security/SecurityAndVulnPanel.vue';
 import GovernanceAndAuthPanel from '../settings/GovernanceAndAuthPanel.vue';
+import ServersPage from '../servers/ServersPage.vue';
+import RegistriesPage from '../servers/RegistriesPage.vue';
+import ServerPage from '../servers/ServerPage.vue';
+import DestinationsPage from '../servers/DestinationsPage.vue';
+import IntegrationCollection from '../integrations/IntegrationCollection.vue';
+import ProjectsPage from '../projects/ProjectsPage.vue';
+import ResourcePage from '../projects/ResourcePage.vue';
+import SettingsPage from '../settings/SettingsPage.vue';
 
 type TabKey =
     | 'overview'
@@ -40,6 +48,7 @@ type TabKey =
 
 const activeTab = ref<TabKey>('overview');
 const currentPath = ref('/');
+const currentRoute = ref(resolveUIRoute('/'));
 const hydrated = ref(false);
 const explicitServer = ref(false);
 const activeServerUuid = ref('localhost');
@@ -139,6 +148,7 @@ function resolveTabFromPath() {
     if (typeof window === 'undefined') return;
     currentPath.value = window.location.pathname;
     const route = resolveUIRoute(currentPath.value);
+    currentRoute.value = route;
     activeTab.value = route.section;
     routeProjectUuid.value = route.projectUuid ?? '';
     routeEnvironmentUuid.value = route.environmentUuid ?? '';
@@ -205,195 +215,287 @@ onBeforeUnmount(() => {
     <div
         class="workspace-root"
         :data-workspace="activeTab"
+        :data-page="currentRoute.page"
         :data-hydrated="hydrated"
     >
         <p
-            v-if="realtimeToast"
-            class="workspace-toast"
+            v-if="!hydrated"
+            class="page-muted"
             role="status"
-            data-testid="realtime-toast"
         >
-            {{ realtimeToast }}
+            Loading…
         </p>
-        <div
-            v-if="showHelp"
-            class="coolify-card"
-            data-testid="help-drawer"
-        >
-            <div class="dialog-heading">
-                <h2>Help &amp; Feedback</h2>
-                <button
-                    type="button"
-                    class="chrome-button"
-                    aria-label="Close feedback"
-                    @click="showHelp = false"
-                >
-                    ✕
-                </button>
-            </div>
-            <form
-                class="coolify-well"
-                style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center"
-                @submit.prevent="submitHelpFeedback"
+        <template v-else>
+            <p
+                v-if="realtimeToast"
+                class="workspace-toast"
+                role="status"
+                data-testid="realtime-toast"
             >
-                <input
-                    v-model="helpSubject"
-                    class="coolify-input"
-                    placeholder="Feedback subject"
-                    aria-label="Feedback subject"
-                    required
-                />
-                <input
-                    v-model="helpDescription"
-                    class="coolify-input"
-                    style="flex: 1; min-width: 220px"
-                    placeholder="Describe issue or feedback"
-                    aria-label="Feedback description"
-                    required
-                />
-                <button
-                    type="submit"
-                    class="coolify-btn coolify-btn-primary"
-                >
-                    Send Feedback
-                </button>
-                <span
-                    v-if="helpStatus"
-                    role="status"
-                    >{{ helpStatus }}</span
-                >
-            </form>
-        </div>
-
-        <template v-if="activeTab === 'overview'">
-            <CanvasGraph v-if="currentPath.includes('canvas')" />
-            <DashboardHome
-                v-else
-                ref="dashboardHomeRef"
-            />
-        </template>
-
-        <template v-else-if="activeTab === 'servers' && currentPath.startsWith('/servers/new')">
-            <div class="section-heading"><h1>New server</h1></div>
-            <ServerForm @created="handleServerCreated" />
-            <a
-                href="/servers"
-                class="workspace-return"
-                >Back to servers</a
+                {{ realtimeToast }}
+            </p>
+            <div
+                v-if="showHelp"
+                class="coolify-card"
+                data-testid="help-drawer"
             >
-        </template>
-        <template v-else-if="activeTab === 'servers'">
-            <div class="coolify-two-column">
-                <ServerList
-                    ref="serverListRef"
-                    :auto-select="!explicitServer"
-                    @select="handleServerSelected"
-                />
-                <ServerForm @created="handleServerCreated" />
-            </div>
-            <div class="coolify-two-column">
-                <ServerSummary :server-uuid="activeServerUuid" />
-                <ServerSettings :server-uuid="activeServerUuid" />
-            </div>
-            <ServerOpsPanel :server-uuid="activeServerUuid" />
-            <ProxyConfig :server-uuid="activeServerUuid" />
-        </template>
-
-        <template v-else-if="activeTab === 'projects'">
-            <ProjectExplorer @select="resourcesManagerRef?.refresh()" />
-            <ResourcesManager
-                ref="resourcesManagerRef"
-                :initial-project-uuid="routeProjectUuid"
-                :initial-environment-uuid="routeEnvironmentUuid"
-                @select-app="
-                    (u) => {
-                        activeApplicationUuid = u;
-                        activeResourceUuid = u;
-                    }
-                "
-                @select-service="
-                    (u) => {
-                        activeServiceUuid = u;
-                        activeResourceUuid = u;
-                    }
-                "
-            />
-            <DeployControl
-                v-if="activeApplicationUuid"
-                :application-uuid="activeApplicationUuid"
-                @deployed="deployHistoryRef?.refresh()"
-            />
-            <DeploymentHistory
-                v-if="activeApplicationUuid"
-                ref="deployHistoryRef"
-                :application-uuid="activeApplicationUuid"
-            />
-            <ServiceEditor
-                v-if="activeServiceUuid"
-                :service-uuid="activeServiceUuid"
-            />
-            <ScheduleList
-                v-if="activeApplicationUuid || activeServiceUuid"
-                :application-uuid="activeApplicationUuid"
-                :service-uuid="activeServiceUuid"
-            />
-        </template>
-
-        <template v-else-if="activeTab === 'operations'">
-            <div class="coolify-card">
-                <div
-                    class="coolify-well"
-                    style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
-                >
-                    <label
-                        >Log Resource UUID:
-                        <input
-                            v-model="activeResourceUuid"
-                            class="coolify-input"
-                            data-testid="log-resource-input"
-                    /></label>
-                    <label
-                        >Terminal Server UUID:
-                        <input
-                            v-model="activeServerUuid"
-                            class="coolify-input"
-                    /></label>
+                <div class="dialog-heading">
+                    <h2>Help &amp; Feedback</h2>
+                    <button
+                        type="button"
+                        class="chrome-button"
+                        aria-label="Close feedback"
+                        @click="showHelp = false"
+                    >
+                        ✕
+                    </button>
                 </div>
+                <form
+                    class="coolify-well"
+                    style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center"
+                    @submit.prevent="submitHelpFeedback"
+                >
+                    <input
+                        v-model="helpSubject"
+                        class="coolify-input"
+                        placeholder="Feedback subject"
+                        aria-label="Feedback subject"
+                        required
+                    />
+                    <input
+                        v-model="helpDescription"
+                        class="coolify-input"
+                        style="flex: 1; min-width: 220px"
+                        placeholder="Describe issue or feedback"
+                        aria-label="Feedback description"
+                        required
+                    />
+                    <button
+                        type="submit"
+                        class="coolify-btn coolify-btn-primary"
+                    >
+                        Send Feedback
+                    </button>
+                    <span
+                        v-if="helpStatus"
+                        role="status"
+                        >{{ helpStatus }}</span
+                    >
+                </form>
             </div>
-            <LogViewer :resource-uuid="activeResourceUuid" />
-            <WebTerminal :server-uuid="activeServerUuid" />
-        </template>
 
-        <template v-else-if="activeTab === 'databases'">
-            <DatabasePanel
-                :database-uuid="activeDatabaseUuid"
-                :db-type="activeDatabaseType"
-                @select="handleDatabaseSelected"
+            <ServersPage v-if="currentRoute.page === 'servers'" />
+            <RegistriesPage v-else-if="currentRoute.page === 'registries'" />
+            <ServerPage
+                v-else-if="currentRoute.page === 'server' && currentRoute.serverUuid"
+                :server-uuid="currentRoute.serverUuid"
+                :subpage="currentRoute.subpage ?? 'general'"
             />
-            <BackupManager
-                :database-uuid="activeDatabaseUuid"
-                @updated="scheduleListRef?.refresh()"
+            <DestinationsPage
+                v-else-if="
+                    currentRoute.page === 'destinations' || currentRoute.page === 'destination'
+                "
+                :destination-uuid="currentRoute.destinationUuid"
+                :subpage="currentRoute.subpage"
             />
-            <ScheduleList
-                ref="scheduleListRef"
-                :database-uuid="activeDatabaseUuid"
+            <ProjectsPage
+                v-else-if="['projects', 'project', 'environment'].includes(currentRoute.page ?? '')"
+                :project-uuid="currentRoute.projectUuid"
+                :environment-uuid="currentRoute.environmentUuid"
+                :subpage="currentRoute.subpage"
             />
-        </template>
+            <ResourcePage
+                v-else-if="['application', 'service', 'database'].includes(currentRoute.page ?? '')"
+                :kind="currentRoute.page as 'application' | 'service' | 'database'"
+                :uuid="
+                    currentRoute.applicationUuid ??
+                    currentRoute.serviceUuid ??
+                    currentRoute.databaseUuid ??
+                    ''
+                "
+                :project-uuid="currentRoute.projectUuid"
+                :environment-uuid="currentRoute.environmentUuid"
+                :subpage="currentRoute.subpage ?? 'general'"
+            />
+            <IntegrationCollection
+                v-else-if="
+                    [
+                        'sources',
+                        'source',
+                        'storages',
+                        'storage',
+                        'private-keys',
+                        'cloud-tokens',
+                        'integration-tokens',
+                        'cloud-init-scripts',
+                    ].includes(currentRoute.page ?? '')
+                "
+                :kind="
+                    currentRoute.page === 'source'
+                        ? 'sources'
+                        : currentRoute.page === 'storage'
+                          ? 'storages'
+                          : (currentRoute.page ?? '')
+                "
+                :uuid="
+                    currentRoute.sourceUuid ??
+                    currentRoute.storageUuid ??
+                    currentRoute.integrationUuid
+                "
+                :subpage="currentRoute.subpage || 'general'"
+            />
+            <ApiTokenManager v-else-if="currentRoute.page === 'api-tokens'" />
+            <NotificationSettings
+                v-else-if="currentRoute.page === 'notifications'"
+                :channel="currentRoute.subpage || 'email'"
+            />
+            <CanvasGraph v-else-if="currentRoute.page === 'canvas'" />
+            <SettingsPage
+                v-else-if="
+                    ['settings', 'team', 'tags', 'shared-variables', 'profile'].includes(
+                        currentRoute.page ?? '',
+                    )
+                "
+                :page="currentRoute.page ?? ''"
+                :subpage="currentRoute.subpage ?? 'general'"
+            />
+            <section
+                v-else-if="currentRoute.page === 'not-found'"
+                class="original-empty"
+            >
+                <h1>Page not found</h1>
+                <a href="/">Back to dashboard</a>
+            </section>
+            <template v-else-if="activeTab === 'overview'">
+                <CanvasGraph v-if="currentPath.includes('canvas')" />
+                <DashboardHome
+                    v-else
+                    ref="dashboardHomeRef"
+                />
+            </template>
 
-        <template v-else-if="activeTab === 'sources'">
-            <SourcesAndCloudPanel />
-        </template>
+            <template v-else-if="activeTab === 'servers' && currentPath.startsWith('/servers/new')">
+                <div class="section-heading"><h1>New server</h1></div>
+                <ServerForm @created="handleServerCreated" />
+                <a
+                    href="/servers"
+                    class="workspace-return"
+                    >Back to servers</a
+                >
+            </template>
+            <template v-else-if="activeTab === 'servers'">
+                <div class="coolify-two-column">
+                    <ServerList
+                        ref="serverListRef"
+                        :auto-select="!explicitServer"
+                        @select="handleServerSelected"
+                    />
+                    <ServerForm @created="handleServerCreated" />
+                </div>
+                <div class="coolify-two-column">
+                    <ServerSummary :server-uuid="activeServerUuid" />
+                    <ServerSettings :server-uuid="activeServerUuid" />
+                </div>
+                <ServerOpsPanel :server-uuid="activeServerUuid" />
+                <ProxyConfig :server-uuid="activeServerUuid" />
+            </template>
 
-        <template v-else-if="activeTab === 'security'">
-            <SecurityAndVulnPanel :server-uuid="activeServerUuid" />
-        </template>
+            <template v-else-if="activeTab === 'projects'">
+                <ProjectExplorer @select="resourcesManagerRef?.refresh()" />
+                <ResourcesManager
+                    ref="resourcesManagerRef"
+                    :initial-project-uuid="routeProjectUuid"
+                    :initial-environment-uuid="routeEnvironmentUuid"
+                    @select-app="
+                        (u) => {
+                            activeApplicationUuid = u;
+                            activeResourceUuid = u;
+                        }
+                    "
+                    @select-service="
+                        (u) => {
+                            activeServiceUuid = u;
+                            activeResourceUuid = u;
+                        }
+                    "
+                />
+                <DeployControl
+                    v-if="activeApplicationUuid"
+                    :application-uuid="activeApplicationUuid"
+                    @deployed="deployHistoryRef?.refresh()"
+                />
+                <DeploymentHistory
+                    v-if="activeApplicationUuid"
+                    ref="deployHistoryRef"
+                    :application-uuid="activeApplicationUuid"
+                />
+                <ServiceEditor
+                    v-if="activeServiceUuid"
+                    :service-uuid="activeServiceUuid"
+                />
+                <ScheduleList
+                    v-if="activeApplicationUuid || activeServiceUuid"
+                    :application-uuid="activeApplicationUuid"
+                    :service-uuid="activeServiceUuid"
+                />
+            </template>
 
-        <template v-else-if="activeTab === 'settings'">
-            <GovernanceAndAuthPanel />
-            <ApiTokenManager />
-            <NotificationSettings />
-            <ServerTransferPanel :server-uuid="activeServerUuid" />
-            <ProxyConfig :server-uuid="activeServerUuid" />
+            <template v-else-if="activeTab === 'operations'">
+                <div class="coolify-card">
+                    <div
+                        class="coolify-well"
+                        style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"
+                    >
+                        <label
+                            >Log Resource UUID:
+                            <input
+                                v-model="activeResourceUuid"
+                                class="coolify-input"
+                                data-testid="log-resource-input"
+                        /></label>
+                        <label
+                            >Terminal Server UUID:
+                            <input
+                                v-model="activeServerUuid"
+                                class="coolify-input"
+                        /></label>
+                    </div>
+                </div>
+                <LogViewer :resource-uuid="activeResourceUuid" />
+                <WebTerminal :server-uuid="activeServerUuid" />
+            </template>
+
+            <template v-else-if="activeTab === 'databases'">
+                <DatabasePanel
+                    :database-uuid="activeDatabaseUuid"
+                    :db-type="activeDatabaseType"
+                    @select="handleDatabaseSelected"
+                />
+                <BackupManager
+                    :database-uuid="activeDatabaseUuid"
+                    @updated="scheduleListRef?.refresh()"
+                />
+                <ScheduleList
+                    ref="scheduleListRef"
+                    :database-uuid="activeDatabaseUuid"
+                />
+            </template>
+
+            <template v-else-if="activeTab === 'sources'">
+                <SourcesAndCloudPanel />
+            </template>
+
+            <template v-else-if="activeTab === 'security'">
+                <SecurityAndVulnPanel :server-uuid="activeServerUuid" />
+            </template>
+
+            <template v-else-if="activeTab === 'settings'">
+                <GovernanceAndAuthPanel />
+                <ApiTokenManager />
+                <NotificationSettings />
+                <ServerTransferPanel :server-uuid="activeServerUuid" />
+                <ProxyConfig :server-uuid="activeServerUuid" />
+            </template>
         </template>
     </div>
 </template>

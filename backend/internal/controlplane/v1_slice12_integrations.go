@@ -403,46 +403,7 @@ func (a *App) handleGitlabApps(w http.ResponseWriter, r *http.Request, p auth.Pr
 		return
 	}
 
-	var id, ownerTeam int64
-	var appUUID, name string
-	if err := a.Pool.QueryRow(r.Context(), `SELECT id, uuid, name, team_id FROM gitlab_apps WHERE uuid = $1 OR id::text = $1`, trimmed).Scan(&id, &appUUID, &name, &ownerTeam); err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"message": "GitLab App not found."})
-		return
-	}
-	ref := access.ResourceRef{Type: "gitlab_app", ID: id, UUID: appUUID, TeamID: &ownerTeam, APISegment: "gitlab-apps"}
-	switch r.Method {
-	case http.MethodPatch:
-		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, ref); err != nil {
-			writeDomainError(w, err)
-			return
-		}
-		var body struct {
-			Name      *string `json:"name"`
-			AppSecret *string `json:"app_secret"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid gitlab app update"})
-			return
-		}
-		if body.Name != nil {
-			name = compat.SanitizeString(*body.Name)
-			_, _ = a.Pool.Exec(r.Context(), `UPDATE gitlab_apps SET name = $1, updated_at = NOW() WHERE id = $2`, name, id)
-		}
-		if body.AppSecret != nil {
-			enc, _ := a.encryptSecretString(*body.AppSecret)
-			_, _ = a.Pool.Exec(r.Context(), `UPDATE gitlab_apps SET app_secret = $1, updated_at = NOW() WHERE id = $2`, enc, id)
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": id, "uuid": appUUID, "name": name})
-	case http.MethodDelete:
-		if err := a.Authz.Check(r.Context(), p, access.ActionDelete, ref); err != nil {
-			writeDomainError(w, err)
-			return
-		}
-		_, _ = a.Pool.Exec(r.Context(), `DELETE FROM gitlab_apps WHERE id = $1`, id)
-		writeJSON(w, http.StatusOK, map[string]string{"message": "GitLab App deleted."})
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
-	}
+	a.handleGitSourceDetails(w, r, p, "gitlab", trimmed)
 }
 
 func (a *App) handleGiteaApps(w http.ResponseWriter, r *http.Request, p auth.Principal) {
@@ -521,7 +482,7 @@ func (a *App) handleGiteaApps(w http.ResponseWriter, r *http.Request, p auth.Pri
 		}
 		return
 	}
-	writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+	a.handleGitSourceDetails(w, r, p, "gitea", trimmed)
 }
 
 // ---- Integration Tokens & DNS Zones ----

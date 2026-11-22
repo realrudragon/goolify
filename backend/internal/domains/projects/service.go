@@ -22,11 +22,12 @@ type Project struct {
 }
 
 type Environment struct {
-	ID        int64  `json:"id"`
-	UUID      string `json:"uuid"`
-	Name      string `json:"name"`
-	ProjectID int64  `json:"project_id"`
-	TeamID    int64  `json:"team_id"`
+	Description string `json:"description,omitempty"`
+	ID          int64  `json:"id"`
+	UUID        string `json:"uuid"`
+	Name        string `json:"name"`
+	ProjectID   int64  `json:"project_id"`
+	TeamID      int64  `json:"team_id"`
 }
 
 type CreateProjectInput struct {

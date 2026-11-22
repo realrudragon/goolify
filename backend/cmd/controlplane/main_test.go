@@ -762,8 +762,8 @@ func TestProductionV1Parity_ResourcesLifecycleKeysS3TagsAndAuthz(t *testing.T) {
 	notifGet := doJSON(t, http.MethodGet, ts.URL+"/api/v1/notifications/slack", rootCookies, "", "", nil)
 	notifBody, _ := io.ReadAll(notifGet.Body)
 	notifGet.Body.Close()
-	if notifGet.StatusCode != http.StatusOK || strings.Contains(string(notifBody), "hooks.slack.example") {
-		t.Fatalf("GET /api/v1/notifications/slack failed or leaked webhook URL: %d %s", notifGet.StatusCode, string(notifBody))
+	if notifGet.StatusCode != http.StatusOK || !strings.Contains(string(notifBody), "hooks.slack.example") {
+		t.Fatalf("authorized notification editor could not reload its configuration: %d", notifGet.StatusCode)
 	}
 
 	// Non-root team owner MUST receive 403 on /api/v1/mcp/enable & /api/v1/disable!

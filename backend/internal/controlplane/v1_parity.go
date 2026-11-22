@@ -513,23 +513,47 @@ func (a *App) handleNotificationChannel(w http.ResponseWriter, r *http.Request, 
 		}
 		cfg, err := a.NotifySvc.LoadConfig(r.Context(), teamID, ch)
 		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"channel": ch, "enabled": false, "configured": false})
+			writeJSON(w, http.StatusOK, map[string]any{"channel": ch, "enabled": false, "configured": false, "team_id": teamID})
 			return
 		}
 		configured := cfg.WebhookURL != "" || cfg.SMTPHost != "" || cfg.ChatID != "" || cfg.BotToken != "" || cfg.PushoverUserKey != "" || cfg.PushoverAPIToken != "" || cfg.ResendAPIKey != ""
-		writeJSON(w, http.StatusOK, map[string]any{
-			"channel":                  cfg.Channel,
-			"enabled":                  cfg.Enabled,
-			"configured":               configured,
-			"resend_enabled":           cfg.ResendEnabled,
+		response := map[string]any{
+			"channel":                     cfg.Channel,
+			"team_id":                     teamID,
+			"enabled":                     cfg.Enabled,
+			"configured":                  configured,
+			"resend_enabled":              cfg.ResendEnabled,
 			"use_instance_email_settings": cfg.UseInstanceEmailSettings,
-			"discord_ping_enabled":     cfg.DiscordPingEnabled,
-		})
+			"discord_ping_enabled":        cfg.DiscordPingEnabled,
+		}
+		if a.Authz.Check(r.Context(), p, access.ActionReadSensitive, access.ResourceRef{Type: "team", ID: teamID, TeamID: &teamID, APISegment: "notifications"}) == nil {
+			encoded, err := json.Marshal(cfg)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+				return
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+				return
+			}
+			for key, value := range fields {
+				response[key] = value
+			}
+		}
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodPatch, http.MethodPut:
 		var raw map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid notification config"})
 			return
+		}
+		if expected, ok := raw["expected_team_id"]; ok {
+			id, valid := expected.(float64)
+			if !valid || id != float64(teamID) {
+				writeJSON(w, http.StatusConflict, map[string]string{"message": "The active team changed. Reload this page before saving."})
+				return
+			}
 		}
 		// Start from existing config if present so partial PATCHes preserve secrets
 		cfg, _ := a.NotifySvc.LoadConfig(r.Context(), teamID, ch)

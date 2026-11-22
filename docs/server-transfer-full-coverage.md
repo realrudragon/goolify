@@ -90,7 +90,7 @@ When you add a model or a setting to the transfer, add it to this file too.
 | ✓ | What | Notes |
 |---|---|---|
 | ✅ | Docker image app (whoami) | |
-| ✅ | Dockerfile app | |
+| ✅ | Dockerfile app | Include an inline Dockerfile; verify its exact contents after export and import |
 | ➕ | Nixpacks app, public GitHub repo | Expected: checklist step for manual webhooks |
 | ✅ | Static app (`is_static`, `is_spa`) | |
 | ➕ | Docker Compose app | raw compose on, one variable with an empty value (`preserve_compose_null`) |

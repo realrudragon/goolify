@@ -138,7 +138,7 @@ func (m *PostgresServiceManager) UpdateCompose(ctx context.Context, principal au
 	}
 	teamID := svc.TeamID
 	if err := m.authz.Check(ctx, principal, access.ActionUpdate, access.ResourceRef{
-		Type: "service", ID: svc.ID, UUID: svc.UUID, ProjectUUID: svc.ProjectUUID, EnvironmentUUID: svc.EnvironmentUUID, TeamID: &teamID, APISegment: "services",
+		Type: "service", ID: svc.ID, UUID: svc.UUID, ProjectUUID: svc.ProjectUUID, EnvironmentUUID: svc.EnvironmentUUID, TeamID: &teamID, ServerID: &svc.ServerID, APISegment: "services",
 	}); err != nil {
 		return PersistedService{}, err
 	}
@@ -235,7 +235,7 @@ func (m *PostgresServiceManager) EnqueueDeploy(ctx context.Context, principal au
 	}
 	teamID := svc.TeamID
 	if err := m.authz.Check(ctx, principal, access.ActionDeploy, access.ResourceRef{
-		Type: "service", ID: svc.ID, UUID: svc.UUID, ProjectUUID: svc.ProjectUUID, EnvironmentUUID: svc.EnvironmentUUID, TeamID: &teamID, APISegment: "services",
+		Type: "service", ID: svc.ID, UUID: svc.UUID, ProjectUUID: svc.ProjectUUID, EnvironmentUUID: svc.EnvironmentUUID, TeamID: &teamID, ServerID: &svc.ServerID, APISegment: "services",
 	}); err != nil {
 		return deployments.DeploymentReceipt{}, err
 	}
@@ -320,9 +320,30 @@ func (m *PostgresServiceManager) ListByTeam(ctx context.Context, principal auth.
 		}) != nil {
 			continue
 		}
+		if m.authz.Check(ctx, principal, access.ActionReadSensitive, access.ResourceRef{Type: "service", ID: svc.ID, UUID: svc.UUID, ProjectUUID: svc.ProjectUUID, EnvironmentUUID: svc.EnvironmentUUID, TeamID: &tid, ServerID: &sid, APISegment: "services"}) != nil {
+			svc.DockerComposeRaw = ""
+			svc.DockerCompose = ""
+		}
 		out = append(out, svc)
 	}
 	return out, rows.Err()
+}
+
+func (m *PostgresServiceManager) GetByUUID(ctx context.Context, principal auth.Principal, uuid string) (PersistedService, error) {
+	svc, err := m.loadByUUID(ctx, uuid)
+	if err != nil {
+		return PersistedService{}, err
+	}
+	teamID := svc.TeamID
+	ref := access.ResourceRef{Type: "service", ID: svc.ID, UUID: svc.UUID, ProjectUUID: svc.ProjectUUID, EnvironmentUUID: svc.EnvironmentUUID, TeamID: &teamID, ServerID: &svc.ServerID, APISegment: "services"}
+	if err := m.authz.Check(ctx, principal, access.ActionRead, ref); err != nil {
+		return PersistedService{}, err
+	}
+	if m.authz.Check(ctx, principal, access.ActionReadSensitive, ref) != nil {
+		svc.DockerComposeRaw = ""
+		svc.DockerCompose = ""
+	}
+	return svc, nil
 }
 
 func (m *PostgresServiceManager) loadByUUID(ctx context.Context, uuid string) (PersistedService, error) {

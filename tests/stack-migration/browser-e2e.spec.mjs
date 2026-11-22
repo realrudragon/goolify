@@ -63,7 +63,7 @@ class CDPClient {
       returnByValue: true,
     });
     if (res.exceptionDetails) {
-      throw new Error(`Browser eval exception: ${res.exceptionDetails.text || JSON.stringify(res.exceptionDetails)}`);
+      throw new Error(`Browser eval exception: ${res.exceptionDetails.exception?.description || res.exceptionDetails.text || JSON.stringify(res.exceptionDetails)}`);
     }
     return res.result?.value;
   }
@@ -113,9 +113,10 @@ async function waitForHTTP(url, timeoutMs = 15000) {
 }
 
 function psqlExec(sql) {
+  const database = new URL(DB_DSN);
   execFileSync('docker', [
-    'exec', 'coolify-mig-test-pg',
-    'psql', '-U', 'coolify', '-d', 'coolify_test', '-v', 'ON_ERROR_STOP=1', '-c', sql,
+    'exec', process.env.TEST_PG_CONTAINER || 'coolify-mig-test-pg',
+    'psql', '-U', decodeURIComponent(database.username), '-d', decodeURIComponent(database.pathname.slice(1)), '-v', 'ON_ERROR_STOP=1', '-c', sql,
   ], { stdio: 'pipe' });
 }
 
@@ -130,6 +131,18 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const routes = { overview: '/', servers: '/servers', projects: '/projects', operations: '/terminal', databases: '/databases', sources: '/sources', security: '/vulnerabilities', settings: '/settings' };
     await cdp.send('Page.navigate', { url: BASE_URL + routes[section] });
     await cdp.waitFor(`document.querySelector('[data-workspace="${section}"][data-hydrated="true"]') !== null`);
+  }
+  async function navigatePage(route, page) {
+    await cdp.send('Page.navigate', { url: BASE_URL + route });
+    await cdp.waitFor(`document.querySelector('[data-page="${page}"][data-hydrated="true"]') !== null`);
+  }
+  async function clickText(text, scope = 'main') {
+    await cdp.waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(scope + ' button')})).some(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled)`);
+    await cdp.eval(`Array.from(document.querySelectorAll(${JSON.stringify(scope + ' button')})).find(button => button.textContent.trim() === ${JSON.stringify(text)} && !button.disabled).click()`);
+  }
+  async function fillLabel(label, value, scope = 'main') {
+    await cdp.waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(scope)} + ' label')).some(el => el.textContent.trim().startsWith(${JSON.stringify(label)}) && el.querySelector('input,textarea,select'))`);
+    await cdp.eval(`(() => { const field = Array.from(document.querySelectorAll(${JSON.stringify(scope + ' label')})).find(label => label.firstChild?.textContent?.trim() === ${JSON.stringify(label)}); if (!field) throw new Error('Missing label: ' + ${JSON.stringify(label)}); const input = field.querySelector('input, textarea, select'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); })()`);
   }
 
   before(async () => {
@@ -362,8 +375,39 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.screenshot('03-logs-terminal.png');
   });
 
+  it('renders separate original server and destination screens and persists destination changes', async () => {
+    await navigatePage('/servers', 'servers');
+    await cdp.waitFor(`document.querySelector('[data-testid="servers-page"] table')?.innerText.includes('edge-node-1')`);
+    assert.equal(await cdp.eval(`document.querySelector('main h1').textContent`), 'Servers');
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('main input[aria-label="Server Name"]'))`), false);
+    assert.equal(await cdp.eval(`document.body.innerText.includes('Server Operations')`), false);
+    await cdp.screenshot('09-original-servers.png');
+    await navigatePage('/destinations', 'destinations');
+    await cdp.waitFor(`document.querySelector('[data-testid="destinations-page"] table')?.innerText.includes('Standalone Docker')`);
+    assert.equal(await cdp.eval(`document.querySelector('main h1').textContent`), 'Destinations');
+    assert.equal(await cdp.eval(`document.body.innerText.includes('Managed Servers') || document.body.innerText.includes('Save Server')`), false);
+    await cdp.screenshot('10-original-destinations.png');
+    await clickText('New destination');
+    await fillLabel('Name', 'browser-network', 'dialog[open]');
+    await fillLabel('Docker network', 'browser-network', 'dialog[open]');
+    await clickText('Create', 'dialog[open]');
+    await cdp.waitFor(`location.pathname.startsWith('/destination/') && document.querySelector('[data-settings-section-title="General"]') !== null`);
+    const destinationPath = await cdp.eval('location.pathname');
+    await fillLabel('Name', 'browser-network-renamed');
+    await clickText('Save');
+    await cdp.waitFor(`document.querySelector('main h1')?.textContent === 'browser-network-renamed'`);
+    await cdp.send('Page.reload');
+    await cdp.waitFor(`document.querySelector('main h1')?.textContent === 'browser-network-renamed'`);
+    await navigatePage(destinationPath + '/danger', 'destination');
+    await clickText('Delete destination');
+    await fillLabel('Destination Name', 'browser-network-renamed', 'dialog[open]');
+    await clickText('Permanently Delete', 'dialog[open]');
+    await cdp.waitFor(`location.pathname === '/destinations' && document.querySelector('[data-testid="destinations-page"]') !== null`);
+    await cdp.waitFor(`!document.body.innerText.includes('browser-network-renamed')`);
+  });
+
   it('creates and revokes a Sanctum API token in Settings & Transfer UI', async () => {
-    await navigateWorkspace('settings');
+    await navigatePage('/security/api-tokens', 'api-tokens');
     await cdp.waitFor(`Boolean(document.querySelector('input[aria-label="Token label"]'))`);
     await cdp.eval(`(() => {
       const inp = document.querySelector('input[aria-label="Token label"]');
@@ -383,15 +427,14 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
 
   it('exercises Sources & Cloud and Security & Scans interactive Vue 3.5 panels', async () => {
     await navigateWorkspace('sources');
-    await cdp.waitFor(`Boolean(document.querySelector('[data-testid="sources-cloud-panel"]'))`);
-    await cdp.eval(`(() => {
-      const inp = document.querySelector('[data-testid="sources-cloud-panel"] input[placeholder="New GitHub App name"]');
-      inp.value = 'Browser GH Source';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      const btn = Array.from(document.querySelectorAll('[data-testid="sources-cloud-panel"] button')).find(b => b.textContent.includes('Add GitHub App'));
-      btn.click();
-    })()`);
-    await cdp.waitFor(`document.body.innerText.includes('GitHub App created.') && document.body.innerText.includes('Browser GH Source')`);
+    await cdp.waitFor(`Boolean(document.querySelector('[data-testid="sources-page"]'))`);
+    assert.equal(await cdp.eval(`document.body.innerText.includes('Cloud Provider Tokens')`), false);
+    await clickText('New source');
+    await cdp.waitFor(`document.querySelector('dialog[open]') !== null`);
+    await fillLabel('Name', 'Browser GH Source', 'dialog[open]');
+    await clickText('Create', 'dialog[open]');
+    await cdp.waitFor(`!document.querySelector('dialog[open]') && document.body.innerText.includes('Browser GH Source')`);
+    assert.equal(await cdp.eval(`fetch('/api/v1/github-apps').then(r => r.json()).then(rows => rows.some(row => row.name === 'Browser GH Source'))`), true);
 
     await navigateWorkspace('security');
     await cdp.waitFor(`Boolean(document.querySelector('[data-testid="security-vuln-panel"]'))`);
@@ -403,7 +446,47 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.screenshot('04-sources-security.png');
   });
 
-  it('exercises real-DB Projects/Apps/Services, Databases/Backups/Schedules, ServerOps, Canvas persistence & Governance UI', async () => {
+  it('opens Docker Registries separately with server cards and a multi-server login dialog', async () => {
+    await navigatePage('/registries', 'registries');
+    await cdp.waitFor(`document.querySelector('main h1')?.textContent.trim() === 'Docker Registries'`);
+    await cdp.waitFor(`document.querySelector('[data-testid="registry-server-card"]') !== null`);
+    assert.equal(await cdp.eval(`document.body.innerText.includes('Add Server') || document.body.innerText.includes('Server Operations')`), false);
+    await clickText('Multi-server login');
+    await cdp.waitFor(`document.querySelector('[data-testid="registry-login-dialog"]')?.open`);
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('[data-testid="registry-login-dialog"] input[type="password"]'))`), true);
+    await clickText('Cancel');
+    await cdp.waitFor(`!document.querySelector('[data-testid="registry-login-dialog"]').open`);
+    await navigatePage('/server/localhost/registries', 'server');
+    await cdp.waitFor(`document.querySelector('[data-testid="registry-server-card"]') !== null`);
+    assert.equal(await cdp.eval(`document.body.innerText.includes('This page has not been restored yet.')`), false);
+    await cdp.screenshot('11-original-registries.png');
+  });
+
+  it('opens each notification channel separately and preserves its saved settings', async () => {
+    await navigatePage('/notifications/discord', 'notifications');
+    await cdp.waitFor(`document.querySelector('[data-testid="notification-settings"]')?.dataset.channel === 'discord'`);
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('[data-testid="governance-auth-panel"]'))`), false);
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('input[aria-label="Token label"]'))`), false);
+    await fillLabel('Webhook URL', 'https://notify.example.test/discord');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+    await cdp.send('Page.reload');
+    await cdp.waitFor(`document.querySelector('input[aria-label="Webhook URL"]')?.value === 'https://notify.example.test/discord'`);
+    await navigatePage('/notifications/telegram', 'notifications');
+    await cdp.waitFor(`document.querySelector('[data-testid="notification-settings"]')?.dataset.channel === 'telegram'`);
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('input[aria-label="Bot Token"]'))`), true);
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('input[aria-label="Webhook URL"]'))`), false);
+    await navigatePage('/notifications/email', 'notifications');
+    await cdp.waitFor(`document.querySelector('input[aria-label="Host"]') !== null`);
+    await fillLabel('Host', 'smtp.example.test');
+    await fillLabel('From Address', 'ops@example.test');
+    await fillLabel('Recipients', 'team@example.test');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+    assert.equal(await cdp.eval(`fetch('/api/v1/notifications/email').then(r => r.json()).then(config => config.smtp_port)`), 587, 'the displayed default port must also be saved');
+  });
+
+  it('creates projects and resources through the catalogue and persists backup schedules, canvas positions and tags', async () => {
     // 1. Canvas real position persistence, opened using the dashboard view toggle.
     await navigateWorkspace('overview');
     await cdp.eval(`Array.from(document.querySelectorAll('.view-switcher button')).find(button => button.textContent.includes('Canvas')).click()`);
@@ -414,73 +497,44 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     })()`);
     await cdp.waitFor(`document.body.innerText.includes('Canvas positions saved to PostgreSQL')`);
 
-    // 2. Projects & Deploy: create real Project -> real Application + Compose Service
-    await navigateWorkspace('projects');
-    await cdp.waitFor(`Boolean(document.querySelector('[data-testid="resources-manager"]'))`);
-    await cdp.eval(`(() => {
-      const inp = document.querySelector('input[aria-label="New project name"]');
-      inp.value = 'Browser Resource Project';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.closest('form').querySelector('button[type="submit"]').click();
-    })()`);
-    await cdp.waitFor(`document.body.innerText.includes('Project created: Browser Resource Project')`);
-    // Refresh ResourcesManager so new project appears in select
-    await cdp.eval(`(() => {
-      const btn = Array.from(document.querySelectorAll('[data-testid="resources-manager"] button')).find(b => b.textContent.trim() === 'Refresh');
-      btn.click();
-    })()`);
-    await cdp.waitFor(`document.querySelector('[data-testid="resources-manager"] select[aria-label="Environment"]')?.options?.length > 0`);
-    await cdp.eval(`(() => {
-      const inp = document.querySelector('[data-testid="new-app-name"]');
-      inp.value = 'browser-live-app';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('[data-testid="create-app-btn"]').click();
-    })()`);
-    await cdp.waitFor(`document.body.innerText.includes('Application created: browser-live-app')`);
-    applicationDeepLink = await cdp.eval(`(async () => {
-      const apps = await fetch('/api/v1/applications').then(res => res.json());
-      const app = apps.find(app => app.name === 'browser-live-app');
-      return {
-        uuid: app.uuid,
-        project: document.querySelector('[data-testid="resources-manager"] select[aria-label="Project"]').value,
-        environment: document.querySelector('[data-testid="resources-manager"] select[aria-label="Environment"]').value,
-      };
-    })()`);
-
-    // 3. Databases & Backups: create real PostgreSQL DB + real Backup Schedule shown in ScheduleList (zero hardcoded rows!)
-    await navigateWorkspace('databases');
-    await cdp.waitFor(`Boolean(document.querySelector('[data-testid="database-panel"]'))`);
-    await cdp.waitFor(`document.querySelector('[data-testid="database-panel"] select[aria-label="Target project"]')?.options?.length > 0`);
-    await cdp.eval(`(() => {
-      const inp = document.querySelector('[data-testid="db-name-input"]');
-      inp.value = 'browser-live-pg';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('[data-testid="db-create-btn"]').click();
-    })()`);
-    await cdp.waitFor(`document.body.innerText.includes('Created postgresql database: browser-live-pg')`);
+    // Projects, catalogue and per-resource configuration use their original deep links.
+    await navigatePage('/projects', 'projects');
+    await clickText('New project');
+    await fillLabel('Name', 'Browser Resource Project', 'dialog[open]');
+    await clickText('Create', 'dialog[open]');
+    await cdp.waitFor(`location.pathname.startsWith('/project/') && document.querySelector('[data-testid="environments-page"]') !== null && document.body.innerText.includes('production')`);
+    const context = await cdp.eval(`(async () => { const p = location.pathname.split('/')[2]; const envs = await fetch('/api/v1/projects/' + p + '/environments').then(r => r.json()); return { project: p, environment: envs[0].uuid }; })()`);
+    const resourceBase = '/project/' + context.project + '/environment/' + context.environment;
+    await navigatePage(resourceBase + '/new', 'environment');
+    await cdp.waitFor(`document.querySelector('[data-testid="new-resource-page"]') !== null`);
+    await clickText('Dockerfile');
+    await cdp.waitFor(`Array.from(document.querySelectorAll('.catalogue-choice strong')).some(title => title.textContent === 'localhost')`);
+    await cdp.eval(`Array.from(document.querySelectorAll('.catalogue-choice')).find(button => button.querySelector('strong')?.textContent === 'localhost').click()`);
+    await fillLabel('Name', 'browser-live-app');
+    await fillLabel('Dockerfile', 'FROM alpine:3.21\nCMD ["sleep", "infinity"]\n');
+    await clickText('Continue');
+    await cdp.waitFor(`document.querySelector('[data-testid="application-page"]') && document.querySelector('main h1')?.textContent === 'browser-live-app'`);
+    applicationDeepLink = { ...context, uuid: await cdp.eval(`location.pathname.split('/')[6]`) };
+    assert.equal(await cdp.eval(`Boolean(document.querySelector('[data-testid="new-resource-page"]'))`), false, 'configuration must not retain the creation catalogue');
+    await navigatePage(resourceBase + '/new', 'environment');
+    await clickText('PostgreSQL');
+    await cdp.waitFor(`Array.from(document.querySelectorAll('.catalogue-choice strong')).some(title => title.textContent === 'localhost')`);
+    await cdp.eval(`Array.from(document.querySelectorAll('.catalogue-choice')).find(button => button.querySelector('strong')?.textContent === 'localhost').click()`);
+    await fillLabel('Name', 'browser-live-pg');
+    await clickText('Continue');
+    await cdp.waitFor(`document.querySelector('[data-testid="database-page"]') && document.querySelector('main h1')?.textContent === 'browser-live-pg'`);
+    const dbPath = await cdp.eval('location.pathname');
+    await navigatePage(dbPath + '/backups', 'database');
+    await cdp.waitFor(`document.querySelector('[data-testid="backup-manager"]') !== null`);
     await cdp.eval(`document.querySelector('[data-testid="create-backup-schedule-btn"]').click()`);
-    await cdp.waitFor(`document.body.innerText.includes('Backup schedule saved:') && document.querySelector('[data-testid="schedule-list"]').innerText.includes('DB Backup')`);
-
-    // 4. Servers tab: ServerOpsPanel (Swarm + Host Scan)
-    await navigateWorkspace('servers');
-    await cdp.waitFor(`Boolean(document.querySelector('[data-testid="server-ops-panel"]'))`);
-    await cdp.eval(`(() => {
-      const btn = Array.from(document.querySelectorAll('[data-testid="server-ops-panel"] button')).find(b => b.textContent.includes('Record Host Scan'));
-      btn.click();
-    })()`);
-    await cdp.waitFor(`document.body.innerText.includes('Host security scan recorded')`);
-
-    // 5. Settings tab: GovernanceAndAuthPanel (Tag + MCP toggle)
-    await navigateWorkspace('settings');
-    await cdp.waitFor(`Boolean(document.querySelector('[data-testid="governance-auth-panel"]'))`);
-    await cdp.eval(`(() => {
-      const inp = document.querySelector('[data-testid="governance-auth-panel"] input[placeholder="New tag name"]');
-      inp.value = 'e2e-live-tag';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.closest('form').querySelector('button[type="submit"]').click();
-    })()`);
-    await cdp.waitFor(`document.body.innerText.includes('Tag saved')`);
-    await cdp.screenshot('05-full-workbench.png');
+    await cdp.waitFor(`document.body.innerText.includes('Backup schedule saved:')`);
+    assert.equal(await cdp.eval(`fetch('/api/v1/databases/' + ${JSON.stringify(dbPath.split('/').at(-1))} + '/backups').then(r => r.json()).then(rows => rows.length > 0)`), true);
+    await navigatePage('/tags', 'tags');
+    await clickText('New tag');
+    await fillLabel('Name', 'e2e-live-tag', 'dialog[open]');
+    await clickText('Save', 'dialog[open]');
+    await cdp.waitFor(`!document.querySelector('dialog[open]') && document.body.innerText.includes('e2e-live-tag')`);
+    await cdp.screenshot('12-original-tags.png');
   });
 
   it('serves 200 HTML shell across Coolify baseline UI routes while keeping unknown API routes JSON 404', async () => {
@@ -505,8 +559,8 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const { uuid, project, environment } = applicationDeepLink;
     const url = `${BASE_URL}/project/${project}/environment/${environment}/application/${uuid}/environment-variables`;
     await cdp.send('Page.navigate', { url });
-    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs') && document.querySelector('[data-testid="resources-manager"] select[aria-label="Environment"]')?.value === '${environment}'`);
-    assert.equal(await cdp.eval(`document.querySelector('[data-testid="resources-manager"] select[aria-label="Project"]').value`), project);
+    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs') && document.querySelector('[data-testid="application-page"]') !== null`);
+    assert.equal(await cdp.eval(`document.querySelector('main .settings-sidebar a').getAttribute('href')`), `/project/${project}/environment/${environment}/application/${uuid}`);
     await cdp.send('Page.reload');
     await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs')`);
   });
@@ -529,7 +583,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const saved = await cdp.eval(`fetch('/api/v1/projects').then(response => response.json()).then(projects => projects.find(project => project.name === 'Browser E2E Project').description)`);
     assert.equal(saved, 'Dashboard configuration saved');
     await cdp.eval(`Array.from(document.querySelectorAll('.servers-table .resource-name')).find(link => link.textContent.includes('edge-node-1')).click()`);
-    await cdp.waitFor(`document.querySelector('[data-workspace="servers"]') && document.querySelectorAll('main ul li').length > 1 && Array.from(document.querySelectorAll('main section strong')).some(title => title.textContent.trim() === 'edge-node-1')`);
+    await cdp.waitFor(`document.querySelector('[data-testid="server-page"]') && document.querySelector('main h1')?.textContent === 'edge-node-1'`);
     await cdp.eval(`document.querySelector('[data-testid="switch-team-20"]').click()`);
     await cdp.waitFor(`location.pathname === '/' && document.querySelector('[data-testid="active-team-id"]')?.dataset.teamId === '20' && document.body.innerText.includes('No servers in this team.')`);
     assert.equal(await cdp.eval(`document.body.innerText.includes('edge-node-1')`), false);
@@ -571,7 +625,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.screenshot('08-dashboard-mobile.png');
     await cdp.send('Emulation.clearDeviceMetricsOverride');
     await cdp.eval(`document.querySelector('.recent-deployment').click()`);
-    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/applications/${uuid}/envs') && document.body.innerText.includes('Deployment History') && document.body.innerText.includes('queued')`);
+    await cdp.waitFor(`window.__apiURLs?.includes('/api/v1/deployments/applications/${uuid}') && document.body.innerText.includes('Deployment History') && document.body.innerText.includes('queued')`);
   });
 
   it('opens feedback from the mobile account menu without leaving the main page inert', async () => {
@@ -602,6 +656,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.waitFor(`document.querySelector('[data-testid="app-sidebar"]').getBoundingClientRect().width === 64`);
     await cdp.send('Page.reload');
     await cdp.waitFor(`document.querySelector('[data-testid="app-sidebar"]')?.getBoundingClientRect().width === 64`);
+    await cdp.waitFor(`document.querySelector('[data-testid="theme-toggle"]')?.closest('astro-island')?.hasAttribute('ssr') === false`);
     await cdp.eval(`document.querySelector('[data-testid="theme-toggle"]').click()`);
     await cdp.waitFor(`!document.documentElement.classList.contains('dark')`);
     await cdp.send('Page.reload');

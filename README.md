@@ -115,9 +115,11 @@ On first boot, `coolify-controlplane` (`-bootstrap-schema=true`) automatically c
 
 ---
 
-## 100% Coolify Compatibility & Parity
+## Coolify Compatibility Status
 
-Goolify maintains wire, cryptographic, database, and behavioral parity with Coolify v4 (tracked across `migration/features.csv`, `migration/routes.csv`, and `migration/data-coverage.csv`):
+Full UX/UI and functional parity with the frozen Coolify source is not established. The CSV inventories track migration scope; their completion labels do not prove that every original page or action works identically. See [the verification ledger](migration/checkpoint-status.md) for tested behavior and known gaps.
+
+The migration contains implementations in the following areas. This list is an inventory, not a guarantee of complete support:
 
 - **Deployments & Build Packs:** `dockerfile`, `railpack`, `dockercompose`, `dockerimage`, and `static` across public repos, GitHub Apps, GitLab Apps, Gitea Apps, and SSH deploy keys — supporting rolling updates, previews, webhooks, rollbacks, and resource/environment cloning.
 - **9 Standalone Databases:** PostgreSQL, MySQL, MariaDB, MongoDB, Redis, ClickHouse, KeyDB, Dragonfly, and SQLite with scheduled S3 backups, TLS/proxy toggles, and full cloning.

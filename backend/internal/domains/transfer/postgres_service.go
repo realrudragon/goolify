@@ -16,14 +16,14 @@ import (
 )
 
 type BundleVolume struct {
-	Name        string `json:"name,omitempty"`
-	MountPath   string `json:"mount_path"`
-	HostPath    string `json:"host_path,omitempty"`
-	FsPath      string `json:"fs_path,omitempty"`
-	Content     string `json:"content,omitempty"`
-	IsDirectory bool   `json:"is_directory,omitempty"`
-	IsHostFile  bool   `json:"is_host_file,omitempty"`
-	IsPersistent bool  `json:"is_persistent"`
+	Name         string `json:"name,omitempty"`
+	MountPath    string `json:"mount_path"`
+	HostPath     string `json:"host_path,omitempty"`
+	FsPath       string `json:"fs_path,omitempty"`
+	Content      string `json:"content,omitempty"`
+	IsDirectory  bool   `json:"is_directory,omitempty"`
+	IsHostFile   bool   `json:"is_host_file,omitempty"`
+	IsPersistent bool   `json:"is_persistent"`
 }
 
 type BundleScheduledTask struct {
@@ -54,6 +54,7 @@ type BundleDatabaseBackup struct {
 }
 
 type BundleApplication struct {
+	Dockerfile              string                `json:"dockerfile,omitempty"`
 	UUID                    string                `json:"uuid"`
 	Name                    string                `json:"name"`
 	Description             string                `json:"description,omitempty"`
@@ -105,6 +106,7 @@ type BundleProject struct {
 }
 
 type BundleEnvironment struct {
+	Description  string              `json:"description,omitempty"`
 	UUID         string              `json:"uuid"`
 	Name         string              `json:"name"`
 	Applications []BundleApplication `json:"applications"`
@@ -327,7 +329,7 @@ func (s *PostgresTransferService) ExportServer(ctx context.Context, principal au
 		SELECT p.uuid, p.name, COALESCE(p.description,''), e.uuid, e.name,
 		       a.id, a.uuid, a.name, COALESCE(a.description,''), COALESCE(a.fqdn,''),
 		       a.build_pack, COALESCE(a.docker_registry_image_name,''), COALESCE(a.docker_registry_image_tag,''),
-		       COALESCE(a.git_repository,''), a.git_branch
+		       COALESCE(a.git_repository,''), a.git_branch, COALESCE(a.dockerfile,'')
 		FROM applications a
 		JOIN environments e ON e.id = a.environment_id
 		JOIN projects p ON p.id = e.project_id
@@ -346,7 +348,7 @@ func (s *PostgresTransferService) ExportServer(ctx context.Context, principal au
 			&pUUID, &pName, &pDesc, &eUUID, &eName,
 			&appID, &app.UUID, &app.Name, &app.Description, &app.FQDN,
 			&app.BuildPack, &app.DockerRegistryImageName, &app.DockerRegistryImageTag,
-			&app.GitRepository, &app.GitBranch,
+			&app.GitRepository, &app.GitBranch, &app.Dockerfile,
 		); err != nil {
 			aRows.Close()
 			return FullTransferBundle{}, err
@@ -467,7 +469,11 @@ func (s *PostgresTransferService) ExportServer(ctx context.Context, principal au
 		ph := projMap[pUUID]
 		bp := BundleProject{UUID: ph.uuid, Name: ph.name, Description: ph.desc}
 		for _, eUUID := range ph.envOrder {
-			bp.Environments = append(bp.Environments, *ph.envs[eUUID].data)
+			env := *ph.envs[eUUID].data
+			if err := s.pool.QueryRow(ctx, `SELECT COALESCE(description,'') FROM environments WHERE uuid=$1`, eUUID).Scan(&env.Description); err != nil {
+				return FullTransferBundle{}, fmt.Errorf("export environment description: %w", err)
+			}
+			bp.Environments = append(bp.Environments, env)
 		}
 		projectsList = append(projectsList, bp)
 	}
@@ -741,8 +747,8 @@ func (s *PostgresTransferService) ImportServer(ctx context.Context, principal au
 			newEnvUUID := s.hooks.NewCUID2()
 			var newEnvID int64
 			if err := tx.QueryRow(ctx, `
-				INSERT INTO environments (uuid, name, project_id) VALUES ($1,$2,$3) RETURNING id
-			`, newEnvUUID, be.Name, newProjID).Scan(&newEnvID); err != nil {
+				INSERT INTO environments (uuid, name, project_id,description) VALUES ($1,$2,$3,$4) RETURNING id
+			`, newEnvUUID, be.Name, newProjID, be.Description).Scan(&newEnvID); err != nil {
 				return TransferReceipt{}, fmt.Errorf("import environment: %w", err)
 			}
 			for _, app := range be.Applications {
@@ -752,12 +758,12 @@ func (s *PostgresTransferService) ImportServer(ctx context.Context, principal au
 					INSERT INTO applications (
 						uuid, name, description, fqdn, build_pack, docker_registry_image_name,
 						docker_registry_image_tag, git_repository, git_branch, status,
-						environment_id, destination_id, private_key_id
-					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'exited',$10,$11,$12)
+						environment_id, destination_id, private_key_id, dockerfile
+					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'exited',$10,$11,$12,$13)
 					RETURNING id
 				`, newAppUUID, app.Name, app.Description, app.FQDN, app.BuildPack,
 					app.DockerRegistryImageName, app.DockerRegistryImageTag, app.GitRepository, app.GitBranch,
-					newEnvID, newDestID, firstKeyID).Scan(&newAppID); err != nil {
+					newEnvID, newDestID, firstKeyID, app.Dockerfile).Scan(&newAppID); err != nil {
 					return TransferReceipt{}, fmt.Errorf("import application: %w", err)
 				}
 				_, _ = tx.Exec(ctx, `INSERT INTO application_settings (application_id) VALUES ($1) ON CONFLICT DO NOTHING`, newAppID)
