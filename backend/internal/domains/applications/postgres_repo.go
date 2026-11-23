@@ -1004,17 +1004,37 @@ func (s *PostgresService) SetEnvVar(ctx context.Context, principal auth.Principa
 		}
 		stored = enc
 	}
-	evUUID := s.hooks.NewCUID2()
+	var existingID int64
+	var existingUUID string
+	findErr := s.pool.QueryRow(ctx, `
+		SELECT id, uuid FROM environment_variables
+		WHERE resourceable_type = 'App\Models\Application' AND resourceable_id = $1 AND key = $2 AND is_preview = $3
+		ORDER BY id ASC LIMIT 1
+	`, a.ID, in.Key, in.IsPreview).Scan(&existingID, &existingUUID)
 	var id int64
-	err = s.pool.QueryRow(ctx, `
-		INSERT INTO environment_variables (
-			uuid, key, value, is_preview, is_buildtime, is_runtime, is_literal, is_shown_once,
-			resourceable_type, resourceable_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'App\Models\Application',$9)
-		RETURNING id
-	`, evUUID, in.Key, stored, in.IsPreview, in.IsBuildtime, in.IsRuntime, in.IsLiteral, in.IsShownOnce, a.ID).Scan(&id)
-	if err != nil {
-		return EnvVarDTO{}, err
+	var evUUID string
+	if findErr == nil && existingID > 0 {
+		id = existingID
+		evUUID = existingUUID
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE environment_variables
+			SET value = $1, is_buildtime = $2, is_runtime = $3, is_literal = $4, is_shown_once = $5, updated_at = NOW()
+			WHERE id = $6
+		`, stored, in.IsBuildtime, in.IsRuntime, in.IsLiteral, in.IsShownOnce, existingID); err != nil {
+			return EnvVarDTO{}, err
+		}
+	} else {
+		evUUID = s.hooks.NewCUID2()
+		err = s.pool.QueryRow(ctx, `
+			INSERT INTO environment_variables (
+				uuid, key, value, is_preview, is_buildtime, is_runtime, is_literal, is_shown_once,
+				resourceable_type, resourceable_id
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'App\Models\Application',$9)
+			RETURNING id
+		`, evUUID, in.Key, stored, in.IsPreview, in.IsBuildtime, in.IsRuntime, in.IsLiteral, in.IsShownOnce, a.ID).Scan(&id)
+		if err != nil {
+			return EnvVarDTO{}, err
+		}
 	}
 	dto := EnvVarDTO{
 		ID: id, UUID: evUUID, Key: in.Key, Value: in.Value,

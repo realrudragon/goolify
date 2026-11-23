@@ -1530,3 +1530,315 @@ html[data-sidebar-collapsed='true'] .account-trigger {
     font-size: 12px;
     color: var(--ui-fg-dim);
 }
+
+/* Coolify v4.7.6 parity: contextual sidebar, underlined section headings, two-pane deployment logs, env & domains */
+.settings-section-heading h2,
+.coolify-underlined-title {
+    text-decoration: underline;
+    text-decoration-color: var(--ui-accent, #7c3aed);
+    text-underline-offset: 6px;
+    text-decoration-thickness: 2px;
+}
+
+.sidebar-divider {
+    height: 1px;
+    margin: 8px 6px;
+    background: var(--ui-border);
+}
+
+.sidebar-subanchors {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 4px 0 6px 22px;
+    padding-left: 12px;
+    border-left: 1px solid var(--ui-border);
+}
+
+.sidebar-subanchor-btn {
+    background: transparent;
+    border: 0;
+    color: var(--ui-fg-dim);
+    text-align: left;
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.sidebar-subanchor-btn:hover,
+.sidebar-subanchor-btn.active {
+    color: var(--ui-fg);
+    background: var(--ui-hover);
+}
+
+.deployment-split-layout {
+    display: grid;
+    grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.deployment-split-layout.is-fullscreen {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 1120px) {
+    .deployment-split-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.deployment-history-pane {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+}
+
+.coolify-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--ui-border);
+}
+
+.coolify-card-header h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.deployment-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--ui-border);
+}
+
+.deployment-toolbar input[type='search'] {
+    flex: 1;
+    min-width: 0;
+}
+
+.deployment-list-header {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ui-fg-dim);
+    border-bottom: 1px solid var(--ui-border);
+}
+
+.deployment-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.deployment-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--ui-border);
+    cursor: pointer;
+    transition: background 120ms ease;
+}
+
+.deployment-row:hover,
+.deployment-row.active {
+    background: var(--ui-hover);
+}
+
+.deployment-row-main {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+}
+
+.deployment-row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.deployment-row-desc {
+    color: var(--ui-fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.deployment-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ui-fg-faint);
+}
+
+.deployment-row-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--ui-fg-dim);
+    flex-shrink: 0;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    flex-shrink: 0;
+}
+
+.deployment-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    font-size: 12px;
+}
+
+.deployment-log-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+    min-height: 480px;
+}
+
+.deployment-log-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--ui-border);
+}
+
+.deployment-log-viewport {
+    flex: 1;
+    padding: 14px 16px;
+    background: #09090b;
+    color: #e4e4e7;
+    font-family: var(--ui-font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    max-height: 68vh;
+    overflow: auto;
+}
+
+.deployment-log-lines {
+    display: grid;
+    gap: 2px;
+}
+
+.deployment-log-line {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+}
+
+.deployment-log-ts {
+    color: #71717a;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.deployment-log-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.deployment-log-text.is-error {
+    color: #f87171;
+}
+
+.deployment-log-text.is-warning {
+    color: #fbbf24;
+}
+
+.coolify-dropdown-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    min-width: 150px;
+    display: grid;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--ui-border);
+    background: var(--ui-menu-bg, #18181b);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.coolify-dropdown-menu button {
+    border: 0;
+    background: transparent;
+    color: var(--ui-fg);
+    text-align: left;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.coolify-dropdown-menu button:hover {
+    background: var(--ui-hover);
+}
+
+.env-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.env-group-row td {
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 12px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
+
+.coolify-info-callout {
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--ui-accent, #7c3aed) 45%, transparent);
+    background: color-mix(in srgb, var(--ui-accent, #7c3aed) 10%, transparent);
+    font-size: 12px;
+}
+
+.coolify-info-callout p {
+    margin: 4px 0 0;
+    color: var(--ui-fg-dim);
+}
+
+.coolify-subsection {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ui-border);
+}
+
+.coolify-subsection h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+}

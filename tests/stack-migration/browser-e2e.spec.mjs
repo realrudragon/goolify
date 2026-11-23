@@ -731,17 +731,30 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const hasHeaderDomainLink = await cdp.eval(`Array.from(document.querySelectorAll('main a[target="_blank"]')).some(a => a.href.includes(${JSON.stringify(uuid + '.apps.coolify.e2e.test')}))`);
     assert.equal(hasHeaderDomainLink, true, 'expected clickable external domain link in application header');
 
-    // Click internal subpage link and verify zero-flicker SPA transition (no full page reload)
-    await cdp.eval(`document.querySelector('a[href="${appBase}/healthcheck"]').click()`);
+    // Click internal subpage link from contextual left sidebar and verify zero-flicker SPA transition (no full page reload)
+    await cdp.eval(`document.querySelector('#desktop-sidebar a[href="${appBase}/domains"]').click()`);
+    await cdp.waitFor(`window.location.pathname === '${appBase}/domains' && document.body.innerText.includes('Protocol redirect') && document.body.innerText.includes('DNS matches') && document.body.innerText.includes('Redirects')`);
+    assert.equal(await cdp.eval(`window.__spaNoReloadMarker`), 'intact', 'contextual sidebar link must navigate via SPA without unloading window');
+
+    await cdp.eval(`document.querySelector('#desktop-sidebar a[href="${appBase}/environment-variables"]').click()`);
+    await cdp.waitFor(`window.location.pathname === '${appBase}/environment-variables' && document.body.innerText.includes('Developer View') && document.body.innerText.includes('Buildtime') && document.body.innerText.includes('Runtime')`);
+    await clickText('Developer View');
+    await cdp.waitFor(`document.body.innerText.includes('Normal View') && document.body.innerText.includes('Preview deployments')`);
+    await clickText('Normal View');
+
+    await cdp.eval(`document.querySelector('#desktop-sidebar a[href="${appBase}/advanced"]').click()`);
+    await cdp.waitFor(`window.location.pathname === '${appBase}/advanced' && document.body.innerText.includes('Build & deploy') && document.body.innerText.includes('Use Docker build cache')`);
+
+    await cdp.eval(`document.querySelector('#desktop-sidebar a[href="${appBase}/healthcheck"]').click()`);
     await cdp.waitFor(`window.location.pathname === '${appBase}/healthcheck'`);
     assert.equal(await cdp.eval(`window.__spaNoReloadMarker`), 'intact', 'subpage link click must navigate via SPA without unloading window');
     await fillLabel('Path', '/healthz');
     await clickText('Save');
     await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
 
-    // Click Deployments tab and verify Deployment Logs panel renders full-width without Configuration sidebar
-    await cdp.eval(`document.querySelector('nav.resource-tabs a[href="${appBase}/deployment"]').click()`);
-    await cdp.waitFor(`window.location.pathname === '${appBase}/deployment' && document.querySelector('.deployment-log-panel') !== null`);
+    // Click Deployment Logs in contextual sidebar and verify two-pane Deployment History + Log Terminal
+    await cdp.eval(`document.querySelector('#desktop-sidebar a[href="${appBase}/deployment"]').click()`);
+    await cdp.waitFor(`window.location.pathname === '${appBase}/deployment' && document.querySelector('.deployment-split-layout') !== null && document.querySelector('.deployment-log-panel') !== null`);
     assert.equal(await cdp.eval(`window.__spaNoReloadMarker`), 'intact', 'resource tab click must navigate via SPA without unloading window');
     assert.equal(await cdp.eval(`document.querySelector('main .settings-sidebar') === null`), true, 'Deployments tab must not show Configuration left sidebar');
 

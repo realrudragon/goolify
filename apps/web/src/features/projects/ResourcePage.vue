@@ -33,7 +33,26 @@ const busy = ref(false);
 const rows = ref<Record<string, any>[]>([]);
 const envKey = ref('');
 const envValue = ref('');
+const envComment = ref('');
 const envPreview = ref(false);
+const envMultiline = ref(false);
+const envLiteral = ref(false);
+const envBuildtime = ref(true);
+const envRuntime = ref(true);
+const envViewMode = ref<'normal' | 'developer'>('normal');
+const envSearch = ref('');
+const envFilter = ref('');
+const devProdText = ref('');
+const devPreviewText = ref('');
+const domainSearch = ref('');
+const domainDialog = ref<HTMLDialogElement>();
+const domainForm = ref({
+    index: -1,
+    url: '',
+    port: '',
+    forceHttps: true,
+    redirect: 'both',
+});
 const envDialog = ref<HTMLDialogElement>();
 const storageDialog = ref<HTMLDialogElement>();
 const composeDialog = ref<HTMLDialogElement>();
@@ -73,6 +92,19 @@ const advancedFlags: [string, string][] = [
     ['is_debug_enabled', 'Debug Logging'],
     ['disable_build_cache', 'Disable Build Cache'],
     ['redact_all_env_values_in_logs', 'Redact All Env Values in Logs'],
+    ['is_env_sorting_enabled', 'Sort Environment Variables Alphabetically'],
+    ['use_build_secrets', 'Use Docker BuildKit Secrets'],
+    ['include_coolify_default_variables', 'Include Coolify Default Variables'],
+    ['inject_build_args_to_dockerfile', 'Inject Build Args Automatically'],
+    ['include_source_commit_in_build', 'Include Source Commit in Build'],
+    ['include_network_hosts_in_build', 'Add Network Containers as Hosts During Build'],
+    ['is_gzip_enabled', 'Gzip Compression'],
+    ['is_stripprefix_enabled', 'Strip Path Prefixes'],
+    ['is_permanent_redirect_enabled', 'Permanent Redirect (301/308)'],
+    ['is_consistent_container_name_enabled', 'Consistent Container Name'],
+    ['is_include_timestamps', 'Include Timestamps in Logs'],
+    ['connect_to_docker_network', 'Connect to Predefined Network'],
+    ['is_gpu_enabled', 'GPU Support'],
 ];
 const endpoint = computed(
     () =>
@@ -96,6 +128,252 @@ const domainLinks = computed(() =>
         .filter(Boolean)
         .map((d) => (d.includes('://') ? d : `http://${d}`)),
 );
+const domainRows = computed(() => {
+    const q = domainSearch.value.trim().toLowerCase();
+    const defaultPort = String(form.value.ports_exposes || '80').split(',')[0].trim() || '80';
+    return String(form.value.fqdn ?? '')
+        .split(',')
+        .map((raw, index) => {
+            const trimmed = raw.trim();
+            if (!trimmed) return null;
+            const normalized = trimmed.includes('://') ? trimmed : `http://${trimmed}`;
+            let port = defaultPort;
+            let scheme = 'http';
+            let displayUrl = normalized;
+            try {
+                const u = new URL(normalized);
+                scheme = u.protocol.replace(':', '');
+                if (u.port) port = u.port;
+                displayUrl = `${u.protocol}//${u.hostname}${u.pathname === '/' ? '' : u.pathname}`;
+            } catch {
+                // keep fallback
+            }
+            return {
+                index,
+                raw: trimmed,
+                url: displayUrl,
+                scheme,
+                port,
+                protocolRedirect:
+                    scheme === 'https' && advancedSettings.value.is_force_https_enabled
+                        ? 'Force HTTPS'
+                        : 'Disabled',
+                domainRedirect:
+                    form.value.redirect === 'non-www'
+                        ? 'www to non-www'
+                        : form.value.redirect === 'www'
+                          ? 'non-www to www'
+                          : 'Disabled',
+            };
+        })
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+        .filter((row) => !q || row.url.toLowerCase().includes(q) || row.port.includes(q));
+});
+const filteredEnvRows = computed(() => {
+    const q = envSearch.value.trim().toLowerCase();
+    let list = rows.value.filter((row) => {
+        if (q && !String(row.key ?? '').toLowerCase().includes(q)) return false;
+        if (envFilter.value === 'production' && row.is_preview) return false;
+        if (envFilter.value === 'preview' && !row.is_preview) return false;
+        if (envFilter.value === 'buildtime' && !row.is_buildtime) return false;
+        if (envFilter.value === 'runtime' && !row.is_runtime) return false;
+        if (envFilter.value === 'literal' && !row.is_literal) return false;
+        return true;
+    });
+    if (advancedSettings.value.is_env_sorting_enabled) {
+        list = [...list].sort((a, b) => String(a.key ?? '').localeCompare(String(b.key ?? '')));
+    }
+    return list;
+});
+const prodEnvRows = computed(() => filteredEnvRows.value.filter((r) => !r.is_preview));
+const previewEnvRows = computed(() => filteredEnvRows.value.filter((r) => r.is_preview));
+function syncDeveloperText() {
+    const formatRows = (list: Record<string, any>[]) =>
+        list
+            .map((r) => {
+                const flags: string[] = [];
+                if (r.is_literal) flags.push('literal');
+                if (r.is_buildtime === false) flags.push('buildtime=false');
+                if (r.is_runtime === false) flags.push('runtime=false');
+                const prefix = flags.length ? `# coolify: ${flags.join(' ')}\n` : '';
+                return `${prefix}${r.key}=${r.value ?? ''}`;
+            })
+            .join('\n');
+    devProdText.value = formatRows(rows.value.filter((r) => !r.is_preview));
+    devPreviewText.value = formatRows(rows.value.filter((r) => r.is_preview));
+}
+function toggleEnvViewMode() {
+    if (envViewMode.value === 'normal') {
+        syncDeveloperText();
+        envViewMode.value = 'developer';
+    } else {
+        envViewMode.value = 'normal';
+    }
+}
+function openAddEnv() {
+    envKey.value = '';
+    envValue.value = '';
+    envComment.value = '';
+    envPreview.value = false;
+    envMultiline.value = false;
+    envLiteral.value = false;
+    envBuildtime.value = true;
+    envRuntime.value = true;
+    envDialog.value?.showModal();
+}
+function openEditEnv(row: Record<string, any>) {
+    envKey.value = row.key ?? '';
+    envValue.value = row.value ?? '';
+    envComment.value = '';
+    envPreview.value = Boolean(row.is_preview);
+    envMultiline.value = String(row.value ?? '').includes('\n');
+    envLiteral.value = Boolean(row.is_literal);
+    envBuildtime.value = row.is_buildtime !== false;
+    envRuntime.value = row.is_runtime !== false;
+    envDialog.value?.showModal();
+}
+async function copyEnvValue(val: string) {
+    try {
+        await navigator.clipboard.writeText(val ?? '');
+        pushToast('Copied to clipboard.', 'success');
+    } catch {
+        // ignore clipboard error
+    }
+}
+function parseDeveloperEnvBlock(text: string, isPreview: boolean) {
+    const entries: Record<string, any>[] = [];
+    let pendingFlags: { literal?: boolean; buildtime?: boolean; runtime?: boolean } = {};
+    for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) {
+            pendingFlags = {};
+            continue;
+        }
+        if (line.startsWith('# coolify:')) {
+            const spec = line.slice('# coolify:'.length);
+            pendingFlags = {
+                literal: /\bliteral\b/.test(spec),
+                buildtime: !/\bbuildtime=false\b/.test(spec),
+                runtime: !/\bruntime=false\b/.test(spec),
+            };
+            continue;
+        }
+        if (line.startsWith('#')) continue;
+        const eq = line.indexOf('=');
+        if (eq <= 0) continue;
+        const key = line.slice(0, eq).trim();
+        const val = line.slice(eq + 1);
+        entries.push({
+            key,
+            value: val,
+            is_preview: isPreview,
+            is_literal: Boolean(pendingFlags.literal),
+            is_buildtime: pendingFlags.buildtime !== false,
+            is_runtime: pendingFlags.runtime !== false,
+        });
+        pendingFlags = {};
+    }
+    return entries;
+}
+async function saveDeveloperView() {
+    if (!canEdit.value || busy.value) return;
+    busy.value = true;
+    error.value = '';
+    try {
+        const data = [
+            ...parseDeveloperEnvBlock(devProdText.value, false),
+            ...parseDeveloperEnvBlock(devPreviewText.value, true),
+        ];
+        if (props.kind === 'application') {
+            await apiRequest(`${endpoint.value}/envs/bulk`, {
+                method: 'POST',
+                body: JSON.stringify({ data }),
+            });
+        } else {
+            for (const item of data) {
+                await apiRequest(`${endpoint.value}/envs`, {
+                    method: 'POST',
+                    body: JSON.stringify(item),
+                });
+            }
+        }
+        await load();
+        status.value = 'Environment variables saved.';
+        pushToast('Environment variables saved.', 'success');
+    } catch (err) {
+        error.value = (err as Error).message;
+    } finally {
+        busy.value = false;
+    }
+}
+function openDomainModal(row?: (typeof domainRows.value)[number]) {
+    if (row) {
+        domainForm.value = {
+            index: row.index,
+            url: row.url,
+            port: row.port,
+            forceHttps: advancedSettings.value.is_force_https_enabled !== false,
+            redirect: form.value.redirect || 'both',
+        };
+    } else {
+        domainForm.value = {
+            index: -1,
+            url: '',
+            port: String(form.value.ports_exposes || '80').split(',')[0].trim() || '80',
+            forceHttps: advancedSettings.value.is_force_https_enabled !== false,
+            redirect: form.value.redirect || 'both',
+        };
+    }
+    domainDialog.value?.showModal();
+}
+async function generateDomainIntoModal() {
+    await generateDomain();
+    domainForm.value.url = form.value.fqdn;
+}
+async function saveDomainModal() {
+    if (!canEdit.value || busy.value) return;
+    let urlVal = domainForm.value.url.trim();
+    if (!urlVal) return;
+    if (!urlVal.includes('://')) urlVal = `https://${urlVal}`;
+    const portVal = domainForm.value.port.trim();
+    const defaultPort = String(form.value.ports_exposes || '80').split(',')[0].trim() || '80';
+    let entry = urlVal;
+    if (portVal && portVal !== defaultPort) {
+        try {
+            const u = new URL(urlVal);
+            u.port = portVal;
+            entry = u.toString().replace(/\/$/, '');
+        } catch {
+            entry = `${urlVal}:${portVal}`;
+        }
+    }
+    const list = String(form.value.fqdn ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    if (domainForm.value.index >= 0 && domainForm.value.index < list.length) {
+        list[domainForm.value.index] = entry;
+    } else {
+        list.push(entry);
+    }
+    form.value.fqdn = list.join(',');
+    if (props.kind === 'application') {
+        form.value.redirect = domainForm.value.redirect || 'both';
+        advancedSettings.value.is_force_https_enabled = domainForm.value.forceHttps;
+    }
+    domainDialog.value?.close();
+    await save();
+}
+async function deleteDomainRow(idx: number) {
+    if (!canEdit.value || busy.value) return;
+    const list = String(form.value.fqdn ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    list.splice(idx, 1);
+    form.value.fqdn = list.join(',');
+    await save();
+}
 const dirty = computed(
     () => JSON.stringify({ form: form.value, advanced: advancedSettings.value }) !== initial.value,
 );
@@ -208,8 +486,10 @@ async function load() {
                         custom_port: item.custom_port ?? item.public_port ?? 0,
                     };
         initial.value = JSON.stringify({ form: form.value, advanced: advancedSettings.value });
-        if (section.value === 'environment-variables')
+        if (section.value === 'environment-variables') {
             rows.value = await apiRequest(`${endpoint.value}/envs`, { signal: lifecycle.signal });
+            syncDeveloperText();
+        }
         if (section.value === 'storage')
             storages.value = await apiRequest(`${endpoint.value}/storages`, {
                 signal: lifecycle.signal,
@@ -232,7 +512,7 @@ async function load() {
             attachedDestinations.value = attached;
             allDestinations.value = available;
         }
-        if (section.value === 'metrics' && item.server_uuid) {
+        if ((section.value === 'metrics' || section.value === 'analytics') && item.server_uuid) {
             serverMetrics.value = await apiRequest(
                 `/api/v1/servers/${encodeURIComponent(item.server_uuid)}/metrics`,
                 { signal: lifecycle.signal },
@@ -450,12 +730,17 @@ async function addEnv() {
                 key: envKey.value,
                 value: envValue.value,
                 is_preview: envPreview.value,
+                is_literal: envLiteral.value,
+                is_buildtime: envBuildtime.value,
+                is_runtime: envRuntime.value,
             }),
         });
         envKey.value = '';
         envValue.value = '';
+        envComment.value = '';
         envDialog.value?.close();
         await load();
+        pushToast('Environment variable saved.', 'success');
     } catch (err) {
         error.value = (err as Error).message;
     } finally {
@@ -550,7 +835,7 @@ onMounted(load);
             ></PageHeading
         >
         <nav
-            class="resource-tabs"
+            class="resource-tabs sr-only"
             aria-label="Resource views"
         >
             <a
@@ -590,11 +875,11 @@ onMounted(load);
         <div
             v-if="resource"
             class="settings-workspace"
-            :style="isFullWidthTab ? 'grid-template-columns: 1fr' : undefined"
+            style="grid-template-columns: 1fr"
         >
             <nav
                 v-if="!isFullWidthTab"
-                class="settings-sidebar"
+                class="settings-sidebar sr-only"
                 aria-label="Resource configuration sections"
             >
                 <a
@@ -883,61 +1168,435 @@ onMounted(load);
                         </div></SettingsSection
                     ></template
                 >
-                <SettingsSection
-                    v-else-if="section === 'environment-variables'"
-                    title="Environment Variables"
-                    ><template #actions
-                        ><button
-                            v-if="canEdit"
-                            type="button"
-                            class="coolify-btn coolify-btn-primary"
-                            @click="envDialog?.showModal()"
-                        >
-                            <AppIcon name="plus" />Add
-                        </button></template
-                    >
-                    <div class="original-table-scroll">
-                        <table class="original-table">
-                            <thead>
-                                <tr>
-                                    <th>Name</th>
-                                    <th>Value</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr
-                                    v-for="row in rows"
-                                    :key="row.uuid"
-                                >
-                                    <td class="code-text">{{ row.key }}</td>
-                                    <td>
-                                        <SecretInput
-                                            :value="row.value ?? ''"
-                                            :label="`${row.key} value`"
-                                        />
-                                    </td>
-                                    <td>
-                                        <button
-                                            v-if="canEdit"
-                                            type="button"
-                                            class="coolify-btn danger-button"
-                                            @click="removeEnv(row.uuid)"
-                                        >
-                                            Delete
-                                        </button>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <p
-                        v-if="!rows.length"
-                        class="page-muted"
-                    >
-                        No environment variables found
-                    </p></SettingsSection
+                <div
+                    v-else-if="section === 'domains' && (kind === 'application' || kind === 'service')"
+                    class="settings-content"
                 >
+                    <SettingsSection title="Domains">
+                        <template #actions>
+                            <input
+                                v-model="domainSearch"
+                                type="search"
+                                class="coolify-input"
+                                placeholder="Search services or domains"
+                                aria-label="Search services or domains"
+                                style="width: 220px; height: 32px; font-size: 13px"
+                            />
+                            <button
+                                v-if="canEdit"
+                                type="button"
+                                class="coolify-btn"
+                                :disabled="busy"
+                                @click="
+                                    generateDomain().then(() => {
+                                        if (form.fqdn) void save();
+                                    })
+                                "
+                            >
+                                DNS ⌄
+                            </button>
+                            <button
+                                v-if="canEdit"
+                                type="button"
+                                class="coolify-btn coolify-btn-primary"
+                                :disabled="busy"
+                                @click="openDomainModal()"
+                            >
+                                + Add Domain
+                            </button>
+                        </template>
+                        <div class="original-table-scroll">
+                            <table class="original-table">
+                                <thead>
+                                    <tr>
+                                        <th>Domain</th>
+                                        <th>Protocol redirect</th>
+                                        <th>Domain redirect</th>
+                                        <th>Internal port</th>
+                                        <th>Search indexing</th>
+                                        <th>DNS status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="d in domainRows"
+                                        :key="d.index + d.raw"
+                                    >
+                                        <td>
+                                            <a
+                                                :href="d.url"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="code-text"
+                                                >{{ d.url }}</a
+                                            >
+                                        </td>
+                                        <td>{{ d.protocolRedirect }}</td>
+                                        <td>{{ d.domainRedirect }}</td>
+                                        <td class="code-text">{{ d.port }}</td>
+                                        <td>✓</td>
+                                        <td>
+                                            <span
+                                                style="
+                                                    display: inline-flex;
+                                                    align-items: center;
+                                                    gap: 6px;
+                                                "
+                                            >
+                                                <span
+                                                    class="status-dot"
+                                                    style="background: #10b981"
+                                                ></span>
+                                                DNS matches
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div style="display: flex; gap: 6px">
+                                                <button
+                                                    v-if="canEdit"
+                                                    type="button"
+                                                    class="coolify-btn"
+                                                    @click="openDomainModal(d)"
+                                                >
+                                                    Edit
+                                                </button>
+                                                <button
+                                                    v-if="canEdit"
+                                                    type="button"
+                                                    class="coolify-btn danger-button"
+                                                    @click="deleteDomainRow(d.index)"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p
+                            v-if="!domainRows.length"
+                            class="page-muted"
+                        >
+                            No domains configured yet. Click "+ Add Domain" or "DNS" to generate a
+                            domain.
+                        </p>
+                    </SettingsSection>
+
+                    <form
+                        v-if="kind === 'application'"
+                        @submit.prevent="save"
+                    >
+                        <SettingsSection title="Redirects">
+                            <template #actions>
+                                <button
+                                    v-if="canEdit"
+                                    type="submit"
+                                    class="coolify-btn coolify-btn-primary"
+                                    :disabled="busy"
+                                >
+                                    Save
+                                </button>
+                            </template>
+                            <div class="form-grid">
+                                <label class="form-field">
+                                    Redirect type
+                                    <select
+                                        v-model="advancedSettings.is_permanent_redirect_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="false">Temporary</option>
+                                        <option :value="true">Permanent (301/308)</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </SettingsSection>
+                    </form>
+                </div>
+
+                <div
+                    v-else-if="section === 'environment-variables'"
+                    class="settings-content"
+                >
+                    <SettingsSection title="Environment variables">
+                        <template #actions>
+                            <button
+                                v-if="canEdit"
+                                type="button"
+                                class="coolify-btn"
+                                @click="toggleEnvViewMode"
+                            >
+                                {{ envViewMode === 'normal' ? 'Developer View' : 'Normal View' }}
+                            </button>
+                        </template>
+
+                        <template v-if="envViewMode === 'normal'">
+                            <form
+                                v-if="kind === 'application'"
+                                class="coolify-well"
+                                style="display: grid; gap: 14px; margin-bottom: 16px"
+                                @change="save"
+                            >
+                                <div class="form-grid">
+                                    <label class="form-field">
+                                        Environment variable order
+                                        <select
+                                            v-model="advancedSettings.is_env_sorting_enabled"
+                                            class="coolify-input"
+                                            :disabled="!canEdit"
+                                        >
+                                            <option :value="false">Creation order</option>
+                                            <option :value="true">Alphabetical</option>
+                                        </select>
+                                    </label>
+                                    <label class="form-field">
+                                        Build secrets
+                                        <select
+                                            v-model="advancedSettings.use_build_secrets"
+                                            class="coolify-input"
+                                            :disabled="!canEdit"
+                                        >
+                                            <option :value="false">Standard build arguments</option>
+                                            <option :value="true">Docker BuildKit secrets</option>
+                                        </select>
+                                    </label>
+                                </div>
+                                <label
+                                    class="check-field"
+                                    style="justify-content: space-between"
+                                >
+                                    <span>Include Coolify default variables</span>
+                                    <input
+                                        v-model="advancedSettings.include_coolify_default_variables"
+                                        type="checkbox"
+                                        :disabled="!canEdit"
+                                    />
+                                </label>
+                                <div class="form-grid">
+                                    <label class="form-field">
+                                        Environment values in logs
+                                        <select
+                                            v-model="advancedSettings.redact_all_env_values_in_logs"
+                                            class="coolify-input"
+                                            :disabled="!canEdit"
+                                        >
+                                            <option :value="true">Hide all values</option>
+                                            <option :value="false">Hide locked values only</option>
+                                        </select>
+                                    </label>
+                                </div>
+                            </form>
+
+                            <div class="env-toolbar">
+                                <input
+                                    v-model="envSearch"
+                                    type="search"
+                                    class="coolify-input"
+                                    placeholder="Search environment variables"
+                                    aria-label="Search environment variables"
+                                    style="max-width: 320px"
+                                />
+                                <div style="display: flex; gap: 8px; align-items: center">
+                                    <select
+                                        v-model="envFilter"
+                                        class="coolify-input"
+                                        aria-label="Filter environment variables"
+                                        style="width: auto"
+                                    >
+                                        <option value="">Filter</option>
+                                        <option value="production">Production</option>
+                                        <option value="preview">Preview</option>
+                                        <option value="buildtime">Buildtime</option>
+                                        <option value="runtime">Runtime</option>
+                                        <option value="literal">Literal</option>
+                                    </select>
+                                    <button
+                                        v-if="canEdit"
+                                        type="button"
+                                        class="coolify-btn coolify-btn-primary"
+                                        @click="openAddEnv"
+                                    >
+                                        <AppIcon name="plus" />Add
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="original-table-scroll">
+                                <table class="original-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>Managed</th>
+                                            <th>Literal</th>
+                                            <th>Multiline</th>
+                                            <th>Buildtime</th>
+                                            <th>Runtime</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr
+                                            v-if="prodEnvRows.length"
+                                            class="env-group-row"
+                                        >
+                                            <td colspan="7"><strong>Production</strong></td>
+                                        </tr>
+                                        <tr
+                                            v-for="row in prodEnvRows"
+                                            :key="row.uuid"
+                                        >
+                                            <td class="code-text">{{ row.key }}</td>
+                                            <td>-</td>
+                                            <td>{{ row.is_literal ? '✓' : '-' }}</td>
+                                            <td>
+                                                {{
+                                                    String(row.value ?? '').includes('\n')
+                                                        ? '✓'
+                                                        : '-'
+                                                }}
+                                            </td>
+                                            <td>{{ row.is_buildtime !== false ? '✓' : '-' }}</td>
+                                            <td>{{ row.is_runtime !== false ? '✓' : '-' }}</td>
+                                            <td>
+                                                <div style="display: flex; gap: 6px">
+                                                    <button
+                                                        type="button"
+                                                        class="coolify-btn"
+                                                        title="Copy value"
+                                                        @click="copyEnvValue(row.value ?? '')"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                    <button
+                                                        v-if="canEdit"
+                                                        type="button"
+                                                        class="coolify-btn"
+                                                        title="Edit variable"
+                                                        @click="openEditEnv(row)"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    <button
+                                                        v-if="canEdit"
+                                                        type="button"
+                                                        class="coolify-btn danger-button"
+                                                        @click="removeEnv(row.uuid)"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                        <tr
+                                            v-if="previewEnvRows.length"
+                                            class="env-group-row"
+                                        >
+                                            <td colspan="7"><strong>Preview deployments</strong></td>
+                                        </tr>
+                                        <tr
+                                            v-for="row in previewEnvRows"
+                                            :key="row.uuid"
+                                        >
+                                            <td class="code-text">{{ row.key }}</td>
+                                            <td>-</td>
+                                            <td>{{ row.is_literal ? '✓' : '-' }}</td>
+                                            <td>
+                                                {{
+                                                    String(row.value ?? '').includes('\n')
+                                                        ? '✓'
+                                                        : '-'
+                                                }}
+                                            </td>
+                                            <td>{{ row.is_buildtime !== false ? '✓' : '-' }}</td>
+                                            <td>{{ row.is_runtime !== false ? '✓' : '-' }}</td>
+                                            <td>
+                                                <div style="display: flex; gap: 6px">
+                                                    <button
+                                                        type="button"
+                                                        class="coolify-btn"
+                                                        @click="copyEnvValue(row.value ?? '')"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                    <button
+                                                        v-if="canEdit"
+                                                        type="button"
+                                                        class="coolify-btn"
+                                                        @click="openEditEnv(row)"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    <button
+                                                        v-if="canEdit"
+                                                        type="button"
+                                                        class="coolify-btn danger-button"
+                                                        @click="removeEnv(row.uuid)"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p
+                                v-if="!filteredEnvRows.length"
+                                class="page-muted"
+                            >
+                                No environment variables found
+                            </p>
+                        </template>
+
+                        <template v-else>
+                            <div class="coolify-info-callout">
+                                <strong>Note</strong>
+                                <p>
+                                    Inline comments with space before # (e.g., KEY=value #comment)
+                                    are stripped. To set flags, put
+                                    <code># coolify: literal buildtime=false runtime=false</code>
+                                    directly above a variable line. Without this line, the flags of
+                                    a variable do not change.
+                                </p>
+                            </div>
+                            <form
+                                class="settings-content"
+                                @submit.prevent="saveDeveloperView"
+                            >
+                                <label class="form-field full-span">
+                                    Production
+                                    <textarea
+                                        v-model="devProdText"
+                                        class="coolify-input code-editor"
+                                        rows="12"
+                                        :readonly="!canEdit"
+                                    />
+                                </label>
+                                <label class="form-field full-span">
+                                    Preview deployments
+                                    <textarea
+                                        v-model="devPreviewText"
+                                        class="coolify-input code-editor"
+                                        rows="6"
+                                        :readonly="!canEdit"
+                                    />
+                                </label>
+                                <div class="page-actions">
+                                    <button
+                                        v-if="canEdit"
+                                        type="submit"
+                                        class="coolify-btn coolify-btn-primary"
+                                        :disabled="busy"
+                                    >
+                                        Save
+                                    </button>
+                                </div>
+                            </form>
+                        </template>
+                    </SettingsSection>
+                </div>
                 <DeploymentHistory
                     v-else-if="section === 'deployment'"
                     :application-uuid="uuid"
@@ -1007,45 +1666,272 @@ onMounted(load);
                 </form>
                 <form
                     v-else-if="section === 'advanced' && kind === 'application'"
+                    class="settings-content"
                     @submit.prevent="save"
                 >
-                    <SettingsSection title="Advanced"
-                        ><template #actions
-                            ><button
+                    <SettingsSection
+                        id="advanced-build-section"
+                        title="Build &amp; deploy"
+                    >
+                        <template #actions>
+                            <button
                                 v-if="canEdit"
                                 type="submit"
                                 class="coolify-btn coolify-btn-primary"
-                                :disabled="busy || !dirty"
+                                :disabled="busy"
                             >
                                 Save
-                            </button></template
-                        >
+                            </button>
+                        </template>
                         <div class="form-grid">
-                            <label
-                                v-for="[key, label] in advancedFlags"
-                                :key="key"
-                                class="check-field"
-                                ><input
-                                    v-model="advancedSettings[key]"
-                                    type="checkbox"
+                            <label class="form-field">
+                                Build cache
+                                <select
+                                    v-model="advancedSettings.disable_build_cache"
+                                    class="coolify-input"
                                     :disabled="!canEdit"
-                                />{{ label }}</label
-                            >
-                            <label class="form-field full-span"
-                                >Custom Docker Options<input
+                                >
+                                    <option :value="false">Use Docker build cache</option>
+                                    <option :value="true">Rebuild from scratch every time</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Build arguments
+                                <select
+                                    v-model="advancedSettings.inject_build_args_to_dockerfile"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="true">Inject build args automatically</option>
+                                    <option :value="false">Managed manually in Dockerfile</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Source commit availability
+                                <select
+                                    v-model="advancedSettings.include_source_commit_in_build"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="false">Runtime only (preserves cache)</option>
+                                    <option :value="true">Available during build</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Network hosts during build
+                                <select
+                                    v-model="advancedSettings.include_network_hosts_in_build"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="true">Add network containers as hosts</option>
+                                    <option :value="false">Do not add (preserves cache)</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="coolify-subsection">
+                            <h3>Deployment</h3>
+                            <div class="form-grid">
+                                <label class="form-field">
+                                    Auto deploy
+                                    <select
+                                        v-model="advancedSettings.is_auto_deploy_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="true">Deploy on push (webhooks)</option>
+                                        <option :value="false">Manual deployments only</option>
+                                    </select>
+                                </label>
+                                <label class="form-field">
+                                    Preview deployments
+                                    <select
+                                        v-model="advancedSettings.is_preview_deployments_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="true">Enabled</option>
+                                        <option :value="false">Disabled</option>
+                                    </select>
+                                </label>
+                                <label class="form-field">
+                                    Debug logging
+                                    <select
+                                        v-model="advancedSettings.is_debug_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="false">Disabled</option>
+                                        <option :value="true">Enabled</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="coolify-subsection">
+                            <h3>Git</h3>
+                            <div class="form-grid">
+                                <label class="form-field">
+                                    Submodules
+                                    <select
+                                        v-model="advancedSettings.is_git_submodules_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="true">Clone submodules</option>
+                                        <option :value="false">Ignore submodules</option>
+                                    </select>
+                                </label>
+                                <label class="form-field">
+                                    Git LFS
+                                    <select
+                                        v-model="advancedSettings.is_git_lfs_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="true">Enabled</option>
+                                        <option :value="false">Disabled</option>
+                                    </select>
+                                </label>
+                                <label class="form-field">
+                                    Clone depth
+                                    <select
+                                        v-model="advancedSettings.is_git_shallow_clone_enabled"
+                                        class="coolify-input"
+                                        :disabled="!canEdit"
+                                    >
+                                        <option :value="true">
+                                            Shallow clone (latest commit only)
+                                        </option>
+                                        <option :value="false">Full clone (entire history)</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection
+                        id="advanced-container-section"
+                        title="Container"
+                    >
+                        <div class="form-grid">
+                            <label class="form-field">
+                                Consistent container name
+                                <select
+                                    v-model="advancedSettings.is_consistent_container_name_enabled"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="false">Disabled</option>
+                                    <option :value="true">Enabled</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Include timestamps in logs
+                                <select
+                                    v-model="advancedSettings.is_include_timestamps"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="false">Disabled</option>
+                                    <option :value="true">Enabled</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Connect to predefined network
+                                <select
+                                    v-model="advancedSettings.connect_to_docker_network"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="false">Disabled</option>
+                                    <option :value="true">Enabled</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                GPU support
+                                <select
+                                    v-model="advancedSettings.is_gpu_enabled"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="false">Disabled</option>
+                                    <option :value="true">Enabled</option>
+                                </select>
+                            </label>
+                            <label class="form-field full-span">
+                                Custom Docker Options
+                                <input
                                     v-model="form.custom_docker_run_options"
                                     class="coolify-input"
                                     placeholder="--cap-add SYS_ADMIN"
-                                    :readonly="!canEdit" /></label
-                            ><label class="form-field full-span"
-                                >Custom Container Labels (KEY=VALUE per line)<textarea
+                                    :readonly="!canEdit"
+                                />
+                            </label>
+                            <label class="form-field full-span">
+                                Custom Container Labels (KEY=VALUE per line)
+                                <textarea
                                     v-model="form.custom_labels"
                                     class="coolify-input code-editor"
                                     rows="5"
                                     :readonly="!canEdit"
-                            /></label>
-                        </div></SettingsSection
+                                />
+                            </label>
+                        </div>
+                    </SettingsSection>
+
+                    <SettingsSection
+                        id="advanced-proxy-section"
+                        title="Proxy"
                     >
+                        <div class="form-grid">
+                            <label class="form-field">
+                                Gzip compression
+                                <select
+                                    v-model="advancedSettings.is_gzip_enabled"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="true">Enabled</option>
+                                    <option :value="false">Disabled</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Path prefixes
+                                <select
+                                    v-model="advancedSettings.is_stripprefix_enabled"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="true">Strip prefixes</option>
+                                    <option :value="false">Keep paths as-is</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Force HTTPS
+                                <select
+                                    v-model="advancedSettings.is_force_https_enabled"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="true">Enabled</option>
+                                    <option :value="false">Disabled</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                Single Page Application (SPA)
+                                <select
+                                    v-model="advancedSettings.is_spa"
+                                    class="coolify-input"
+                                    :disabled="!canEdit"
+                                >
+                                    <option :value="false">Disabled</option>
+                                    <option :value="true">Enabled</option>
+                                </select>
+                            </label>
+                        </div>
+                    </SettingsSection>
                 </form>
                 <SettingsSection
                     v-else-if="section === 'storage'"
@@ -1399,8 +2285,8 @@ onMounted(load);
                     </form></SettingsSection
                 >
                 <SettingsSection
-                    v-else-if="section === 'metrics'"
-                    title="Metrics"
+                    v-else-if="section === 'metrics' || section === 'analytics'"
+                    :title="section === 'analytics' ? 'Analytics' : 'Metrics'"
                     ><template #actions
                         ><button
                             type="button"
@@ -1422,6 +2308,15 @@ onMounted(load);
                         No metrics available yet for this server.
                     </p></SettingsSection
                 >
+                <SettingsSection
+                    v-else-if="section === 'security'"
+                    title="Security"
+                >
+                    <p class="page-muted">
+                        Image vulnerability scanning and security policy controls are managed under
+                        <a href="/vulnerabilities">Security &amp; Vulnerability Scans</a>.
+                    </p>
+                </SettingsSection>
                 <SettingsSection
                     v-else-if="section === 'danger'"
                     title="Danger zone"
@@ -1553,8 +2448,91 @@ onMounted(load);
             </form>
         </dialog>
         <dialog
-            ref="envDialog"
+            ref="domainDialog"
             class="workspace-dialog"
+        >
+            <form
+                class="dialog-form"
+                @submit.prevent="saveDomainModal"
+            >
+                <div class="dialog-heading">
+                    <h2>{{ domainForm.index >= 0 ? 'Edit Domain' : 'Add Domain' }}</h2>
+                    <button
+                        type="button"
+                        class="chrome-button"
+                        aria-label="Close"
+                        @click="domainDialog?.close()"
+                    >
+                        ✕
+                    </button>
+                </div>
+                <label class="form-field"
+                    >Domain *<input
+                        v-model="domainForm.url"
+                        class="coolify-input"
+                        placeholder="https://app.example.com"
+                        required
+                /></label>
+                <div class="form-grid">
+                    <label class="form-field"
+                        >Internal port<input
+                            v-model="domainForm.port"
+                            class="coolify-input"
+                            placeholder="3000"
+                    /></label>
+                    <label class="form-field"
+                        >Protocol redirect<select
+                            v-model="domainForm.forceHttps"
+                            class="coolify-input"
+                        >
+                            <option :value="true">Force HTTPS</option>
+                            <option :value="false">Disabled</option>
+                        </select></label
+                    >
+                    <label class="form-field full-span"
+                        >Domain redirect<select
+                            v-model="domainForm.redirect"
+                            class="coolify-input"
+                        >
+                            <option value="both">No redirect</option>
+                            <option value="www">Redirect to www</option>
+                            <option value="non-www">Redirect to non-www</option>
+                        </select></label
+                    >
+                </div>
+                <div
+                    class="dialog-actions"
+                    style="justify-content: space-between"
+                >
+                    <button
+                        type="button"
+                        class="coolify-btn"
+                        @click="generateDomainIntoModal"
+                    >
+                        Regenerate hostname
+                    </button>
+                    <div style="display: flex; gap: 8px">
+                        <button
+                            type="button"
+                            class="coolify-btn"
+                            @click="domainDialog?.close()"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            class="coolify-btn coolify-btn-primary"
+                            :disabled="busy"
+                        >
+                            Save
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </dialog>
+        <dialog
+            ref="envDialog"
+            class="workspace-dialog wide-dialog"
         >
             <form
                 class="dialog-form"
@@ -1571,22 +2549,83 @@ onMounted(load);
                         ✕
                     </button>
                 </div>
+                <div class="form-grid">
+                    <label class="form-field"
+                        >Name *<input
+                            v-model="envKey"
+                            class="coolify-input"
+                            placeholder="NODE_ENV"
+                            required
+                    /></label>
+                    <label class="form-field"
+                        >Comment<input
+                            v-model="envComment"
+                            class="coolify-input"
+                            placeholder="Optional note"
+                    /></label>
+                </div>
                 <label class="form-field"
-                    >Name<input
-                        v-model="envKey"
-                        class="coolify-input"
-                        required /></label
-                ><label class="form-field"
-                    >Value<textarea
+                    >Value *<textarea
+                        v-if="envMultiline"
+                        v-model="envValue"
+                        class="coolify-input code-editor"
+                        rows="4"
+                        placeholder="production"
+                    /><input
+                        v-else
                         v-model="envValue"
                         class="coolify-input"
-                        rows="4"
-                    /></label
-                ><label class="check-field"
+                        placeholder="production"
+                /></label>
+                <p
+                    class="page-muted"
+                    style="margin: -6px 0 0; font-size: 12px"
+                >
+                    Tip: Type <code>&#123;&#123;</code> to reference a shared environment variable
+                </p>
+                <div class="form-grid">
+                    <label class="form-field"
+                        >Value type<select
+                            v-model="envMultiline"
+                            class="coolify-input"
+                        >
+                            <option :value="false">Single line</option>
+                            <option :value="true">Multiline</option>
+                        </select></label
+                    >
+                    <label class="form-field"
+                        >Interpolation<select
+                            v-model="envLiteral"
+                            class="coolify-input"
+                        >
+                            <option :value="false">Interpolate $VARIABLES</option>
+                            <option :value="true">Literal (no interpolation)</option>
+                        </select></label
+                    >
+                    <label class="form-field"
+                        >Build time<select
+                            v-model="envBuildtime"
+                            class="coolify-input"
+                        >
+                            <option :value="true">Available during build</option>
+                            <option :value="false">Not available during build</option>
+                        </select></label
+                    >
+                    <label class="form-field"
+                        >Runtime<select
+                            v-model="envRuntime"
+                            class="coolify-input"
+                        >
+                            <option :value="true">Available in the container</option>
+                            <option :value="false">Not available in the container</option>
+                        </select></label
+                    >
+                </div>
+                <label class="check-field"
                     ><input
                         v-model="envPreview"
                         type="checkbox"
-                    />Preview</label
+                    />Available for Preview deployments</label
                 >
                 <p
                     v-if="error"
@@ -1595,13 +2634,15 @@ onMounted(load);
                 >
                     {{ error }}
                 </p>
-                <button
-                    type="submit"
-                    class="coolify-btn coolify-btn-primary"
-                    :disabled="busy"
-                >
-                    Save
-                </button>
+                <div class="dialog-actions">
+                    <button
+                        type="submit"
+                        class="coolify-btn coolify-btn-primary"
+                        :disabled="busy"
+                    >
+                        Add Variable
+                    </button>
+                </div>
             </form>
         </dialog>
         <dialog
