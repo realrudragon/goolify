@@ -132,6 +132,10 @@ func (m *PostgresServiceManager) Create(ctx context.Context, principal auth.Prin
 }
 
 func (m *PostgresServiceManager) UpdateCompose(ctx context.Context, principal auth.Principal, serviceUUID string, rawCompose string) (PersistedService, error) {
+	return m.UpdateComposeAndFQDN(ctx, principal, serviceUUID, &rawCompose, nil)
+}
+
+func (m *PostgresServiceManager) UpdateComposeAndFQDN(ctx context.Context, principal auth.Principal, serviceUUID string, rawComposeOpt *string, fqdnOpt *string) (PersistedService, error) {
 	svc, err := m.loadByUUID(ctx, serviceUUID)
 	if err != nil {
 		return PersistedService{}, err
@@ -142,9 +146,16 @@ func (m *PostgresServiceManager) UpdateCompose(ctx context.Context, principal au
 	}); err != nil {
 		return PersistedService{}, err
 	}
-	rawCompose = DecodeComposeInput(rawCompose)
+	rawCompose := svc.DockerComposeRaw
+	if rawComposeOpt != nil {
+		rawCompose = DecodeComposeInput(*rawComposeOpt)
+	}
+	fqdn := svc.FQDN
+	if fqdnOpt != nil {
+		fqdn = strings.TrimSpace(*fqdnOpt)
+	}
 	parsed, err := m.parser.Parse(ctx, compose.ComposeParseInput{
-		ParserVersion: "5", RawCompose: rawCompose, ResourceUUID: svc.UUID, TeamID: svc.TeamID, ProxyType: "traefik", FQDN: svc.FQDN,
+		ParserVersion: "5", RawCompose: rawCompose, ResourceUUID: svc.UUID, TeamID: svc.TeamID, ProxyType: "traefik", FQDN: fqdn,
 	})
 	if err != nil {
 		return PersistedService{}, err
@@ -155,13 +166,14 @@ func (m *PostgresServiceManager) UpdateCompose(ctx context.Context, principal au
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := tx.QueryRow(ctx, `
-		UPDATE services SET docker_compose_raw = $2, docker_compose = $3, updated_at = NOW()
+		UPDATE services SET docker_compose_raw = $2, docker_compose = $3, fqdn = NULLIF($4, ''), updated_at = NOW()
 		WHERE id = $1 RETURNING updated_at
-	`, svc.ID, rawCompose, parsed.RenderedYAML).Scan(&svc.UpdatedAt); err != nil {
+	`, svc.ID, rawCompose, parsed.RenderedYAML, fqdn).Scan(&svc.UpdatedAt); err != nil {
 		return PersistedService{}, err
 	}
 	svc.DockerComposeRaw = rawCompose
 	svc.DockerCompose = parsed.RenderedYAML
+	svc.FQDN = fqdn
 	if err := m.syncServiceSubResourcesInTx(ctx, tx, svc.ID, svc.FQDN, parsed); err != nil {
 		return PersistedService{}, err
 	}
@@ -185,11 +197,11 @@ func (m *PostgresServiceManager) syncServiceSubResourcesInTx(ctx context.Context
 		spec := parsed.Applications[appName]
 		var existingID int64
 		err := tx.QueryRow(ctx, `SELECT id FROM service_applications WHERE service_id = $1 AND name = $2 AND deleted_at IS NULL`, serviceID, appName).Scan(&existingID)
+		fqdnVal := spec.FQDN
+		if fqdnVal == "" {
+			fqdnVal = defaultFQDN
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			fqdnVal := spec.FQDN
-			if fqdnVal == "" {
-				fqdnVal = defaultFQDN
-			}
 			portsVal := strings.Join(spec.Ports, ",")
 			if _, iErr := tx.Exec(ctx, `
 				INSERT INTO service_applications (uuid, name, human_name, fqdn, ports, status, service_id, exclude_from_status)
@@ -199,6 +211,8 @@ func (m *PostgresServiceManager) syncServiceSubResourcesInTx(ctx context.Context
 			}
 		} else if err != nil {
 			return err
+		} else {
+			_, _ = tx.Exec(ctx, `UPDATE service_applications SET fqdn = NULLIF($2, ''), updated_at = NOW() WHERE id = $1`, existingID, fqdnVal)
 		}
 	}
 

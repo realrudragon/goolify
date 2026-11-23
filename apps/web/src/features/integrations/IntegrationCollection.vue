@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import AppIcon from '../../components/AppIcon.vue';
 import { apiRequest } from '../../lib/api';
+import { navigateTo } from '../../lib/navigation';
 import { session } from '../../lib/session';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
@@ -292,7 +293,7 @@ async function remove() {
             { method: 'DELETE' },
         );
         deleteDialog.value?.close();
-        if (props.uuid) window.location.assign(config.value.route);
+        if (props.uuid) navigateTo(config.value.route);
         else await load();
     } catch (err) {
         error.value = (err as Error).message;
@@ -300,6 +301,14 @@ async function remove() {
         saving.value = false;
     }
 }
+watch(
+    () => [props.kind, props.uuid, props.subpage],
+    () => {
+        message.value = '';
+        error.value = '';
+        void load();
+    },
+);
 onMounted(() => {
     const saved = localStorage.getItem(`coolify-${props.kind}-view`);
     if (saved === 'grid') mode.value = 'grid';

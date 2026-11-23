@@ -29,7 +29,7 @@ func (r *PostgresRepository) GetByUUID(ctx context.Context, uuid string) (Server
 	var transferredAt *time.Time
 	err := r.pool.QueryRow(ctx, `
 		SELECT s.id, s.uuid, s.name, s.description, s.ip, s.port, s."user", s.team_id,
-		       s.private_key_id, pk.uuid,
+		       s.private_key_id, pk.uuid, COALESCE(ss.wildcard_domain, ''),
 		       COALESCE(ss.is_reachable, FALSE), COALESCE(ss.is_usable, FALSE), COALESCE(ss.force_disabled, FALSE),
 		       ta.transferred_at, s.updated_at
 		FROM servers s
@@ -39,7 +39,7 @@ func (r *PostgresRepository) GetByUUID(ctx context.Context, uuid string) (Server
 		WHERE s.uuid = $1 AND s.deleted_at IS NULL
 	`, uuid).Scan(
 		&s.ID, &s.UUID, &s.Name, &desc, &s.IP, &s.Port, &s.User, &s.TeamID,
-		&s.PrivateKeyID, &pkUUID,
+		&s.PrivateKeyID, &pkUUID, &s.WildcardDomain,
 		&s.IsReachable, &s.IsUsable, &s.ForceDisabled,
 		&transferredAt, &s.UpdatedAt,
 	)
@@ -62,7 +62,7 @@ func (r *PostgresRepository) GetByUUID(ctx context.Context, uuid string) (Server
 func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID int64) ([]Server, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT s.id, s.uuid, s.name, s.description, s.ip, s.port, s."user", s.team_id,
-		       s.private_key_id, pk.uuid,
+		       s.private_key_id, pk.uuid, COALESCE(ss.wildcard_domain, ''),
 		       COALESCE(ss.is_reachable, FALSE), COALESCE(ss.is_usable, FALSE), COALESCE(ss.force_disabled, FALSE),
 		       ta.transferred_at, s.updated_at
 		FROM servers s
@@ -84,7 +84,7 @@ func (r *PostgresRepository) ListByTeam(ctx context.Context, teamID int64) ([]Se
 		var transferredAt *time.Time
 		if err := rows.Scan(
 			&s.ID, &s.UUID, &s.Name, &desc, &s.IP, &s.Port, &s.User, &s.TeamID,
-			&s.PrivateKeyID, &pkUUID,
+			&s.PrivateKeyID, &pkUUID, &s.WildcardDomain,
 			&s.IsReachable, &s.IsUsable, &s.ForceDisabled,
 			&transferredAt, &s.UpdatedAt,
 		); err != nil {
@@ -142,14 +142,15 @@ func (r *PostgresRepository) Save(ctx context.Context, srv Server) (Server, erro
 			return Server{}, err
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO server_settings (server_id, is_reachable, is_usable, force_disabled)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO server_settings (server_id, is_reachable, is_usable, force_disabled, wildcard_domain)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 			ON CONFLICT (server_id) DO UPDATE SET
 				is_reachable = EXCLUDED.is_reachable,
 				is_usable = EXCLUDED.is_usable,
 				force_disabled = EXCLUDED.force_disabled,
+				wildcard_domain = EXCLUDED.wildcard_domain,
 				updated_at = NOW()
-		`, srv.ID, srv.IsReachable, srv.IsUsable, srv.ForceDisabled); err != nil {
+		`, srv.ID, srv.IsReachable, srv.IsUsable, srv.ForceDisabled, srv.WildcardDomain); err != nil {
 			return Server{}, err
 		}
 		srv.Revision++
@@ -162,10 +163,10 @@ func (r *PostgresRepository) Save(ctx context.Context, srv Server) (Server, erro
 			return Server{}, err
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO server_settings (server_id, is_reachable, is_usable, force_disabled)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO server_settings (server_id, is_reachable, is_usable, force_disabled, wildcard_domain)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))
 			ON CONFLICT (server_id) DO NOTHING
-		`, srv.ID, srv.IsReachable, srv.IsUsable, srv.ForceDisabled); err != nil {
+		`, srv.ID, srv.IsReachable, srv.IsUsable, srv.ForceDisabled, srv.WildcardDomain); err != nil {
 			return Server{}, err
 		}
 		// Mirror Eloquent Server created hook: create default standalone_dockers destination

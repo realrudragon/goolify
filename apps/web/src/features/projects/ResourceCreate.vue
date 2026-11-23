@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import { apiRequest } from '../../lib/api';
+import { navigateTo } from '../../lib/navigation';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
 const props = defineProps<{ projectUuid: string; environmentUuid: string }>();
@@ -65,6 +66,7 @@ const server = ref('');
 const destination = ref('');
 const form = ref<Record<string, any>>({
     name: '',
+    fqdn: '',
     git_repository: '',
     git_branch: 'main',
     build_pack: 'dockerfile',
@@ -75,6 +77,7 @@ const form = ref<Record<string, any>>({
     docker_registry_image_name: '',
     docker_registry_image_tag: '',
     ports_exposes: '',
+    ports_mappings: '',
     image: '',
     password: '',
     private_key_uuid: '',
@@ -149,8 +152,10 @@ async function create() {
             server_uuid: server.value,
             destination_uuid: destination.value,
         };
-        if (choice.family === 'services') payload.type = choice.type;
-        else if (choice.family === 'databases') {
+        if (choice.family === 'services') {
+            payload.type = choice.type;
+            if (form.value.fqdn) payload.fqdn = form.value.fqdn;
+        } else if (choice.family === 'databases') {
             if (form.value.image) payload.image = form.value.image;
             if (form.value.password) payload.password = form.value.password;
         } else {
@@ -170,7 +175,14 @@ async function create() {
                                     ? ['private_key_uuid']
                                     : []),
                           ];
-            for (const key of [...fields, 'ports_exposes', 'base_directory', 'publish_directory'])
+            for (const key of [
+                ...fields,
+                'fqdn',
+                'ports_exposes',
+                'ports_mappings',
+                'base_directory',
+                'publish_directory',
+            ])
                 if (form.value[key] !== '') payload[key] = form.value[key];
             if (['public', 'private-github-app', 'private-deploy-key'].includes(choice.type))
                 payload.build_pack = form.value.build_pack || 'dockerfile';
@@ -179,7 +191,7 @@ async function create() {
             `/api/v1/${choice.family}${choice.family === 'services' ? '' : `/${choice.type}`}`,
             { method: 'POST', body: JSON.stringify(payload) },
         );
-        window.location.assign(
+        navigateTo(
             `/project/${props.projectUuid}/environment/${props.environmentUuid}/${choice.family === 'applications' ? 'application' : choice.family === 'databases' ? 'database' : 'service'}/${created.uuid}`,
         );
     } catch (err) {
@@ -438,10 +450,29 @@ onMounted(load);
                                 >Tag<input
                                     v-model="form.docker_registry_image_tag"
                                     class="coolify-input" /></label></template
+                        ><label class="form-field full-span"
+                            >Domains (FQDN)<input
+                                v-model="form.fqdn"
+                                class="coolify-input"
+                                placeholder="https://app.example.com" /></label
                         ><label class="form-field"
                             >Ports exposes<input
                                 v-model="form.ports_exposes"
                                 class="coolify-input"
+                                placeholder="80" /></label
+                        ><label class="form-field"
+                            >Ports mappings<input
+                                v-model="form.ports_mappings"
+                                class="coolify-input"
+                                placeholder="8080:80"
+                        /></label>
+                    </template>
+                    <template v-if="selected?.family === 'services'"
+                        ><label class="form-field full-span"
+                            >Domains (FQDN)<input
+                                v-model="form.fqdn"
+                                class="coolify-input"
+                                placeholder="https://service.example.com"
                         /></label>
                     </template>
                     <template v-if="selected?.family === 'databases'"

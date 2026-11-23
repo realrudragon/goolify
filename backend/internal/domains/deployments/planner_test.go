@@ -163,3 +163,45 @@ func TestBuildPlan_StaticSPAAndDockerComposeRaw(t *testing.T) {
 		t.Fatalf("expected raw docker-compose.yaml write command:\n%s", cJoined)
 	}
 }
+
+func TestBuildPlan_DomainPortOverridePortsMappingsRedirectAndProxyAutoStart(t *testing.T) {
+	p := NewDeploymentPlanner()
+	dctx := deploymentcontext.DeploymentContext{
+		ApplicationUUID: "app-domain-cfg",
+		ServerUUID:      "localhost",
+		DockerNetwork:   "coolify",
+		BuildPack:       "dockerfile",
+		InputRevision:   "9999888877776666",
+		Settings: map[string]string{
+			"git_repository": "https://github.com/example/node-app.git",
+			"fqdn":           "https://app.example.com:4000,http://www.example.com",
+			"ports_exposes":  "3000",
+			"ports_mappings": "18080:3000",
+			"redirect":       "non-www",
+		},
+	}
+	plan, err := p.BuildPlan(dctx, "op-domain", "")
+	if err != nil {
+		t.Fatalf("BuildPlan failed: %v", err)
+	}
+	joined := strings.Join(plan.Commands, "\n")
+	if !strings.Contains(joined, "coolify-proxy") {
+		t.Fatalf("expected auto-ensure coolify-proxy command when fqdn is configured:\n%s", joined)
+	}
+	if !strings.Contains(joined, "package.json") {
+		t.Fatalf("expected auto-detect Dockerfile fallback for git repo:\n%s", joined)
+	}
+	composeYAML := buildGeneratedComposeYAML(dctx, "coolify/app-domain-cfg:999988887777", "coolify", plan.Labels)
+	for _, want := range []string{
+		`loadbalancer.server.port=4000`,
+		`loadbalancer.server.port=3000`,
+		`redirect-to-https.redirectscheme.scheme=https`,
+		`redir-non-www.redirectregex.regex`,
+		`- "18080:3000"`,
+	} {
+		if !strings.Contains(composeYAML, want) {
+			t.Fatalf("generated compose missing %q:\n%s", want, composeYAML)
+		}
+	}
+}
+

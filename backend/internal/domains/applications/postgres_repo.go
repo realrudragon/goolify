@@ -38,6 +38,8 @@ type Application struct {
 	DockerComposeLocation   string            `json:"docker_compose_location,omitempty"`
 	DockerComposeRaw        string            `json:"docker_compose_raw,omitempty"`
 	PortsExposes            string            `json:"ports_exposes,omitempty"`
+	PortsMappings           string            `json:"ports_mappings,omitempty"`
+	Redirect                string            `json:"redirect,omitempty"`
 	BaseDirectory           string            `json:"base_directory,omitempty"`
 	PublishDirectory        string            `json:"publish_directory,omitempty"`
 	InstallCommand          string            `json:"install_command,omitempty"`
@@ -99,6 +101,8 @@ type CreateApplicationInput struct {
 	DockerComposeLocation   string            `json:"docker_compose_location,omitempty"`
 	DockerComposeRaw        string            `json:"docker_compose_raw"`
 	PortsExposes            string            `json:"ports_exposes"`
+	PortsMappings           string            `json:"ports_mappings,omitempty"`
+	Redirect                string            `json:"redirect,omitempty"`
 	BaseDirectory           string            `json:"base_directory,omitempty"`
 	PublishDirectory        string            `json:"publish_directory,omitempty"`
 	WebhookSecretGitHub     string            `json:"webhook_secret_github,omitempty"`
@@ -134,6 +138,7 @@ type DeploymentRecord struct {
 	ApplicationUUID string    `json:"application_uuid"`
 	ServerUUID      string    `json:"server_uuid"`
 	Status          string    `json:"status"`
+	Logs            string    `json:"logs,omitempty"`
 	ForceRebuild    bool      `json:"force_rebuild"`
 	IsWebhook       bool      `json:"is_webhook"`
 	IsAPI           bool      `json:"is_api"`
@@ -181,7 +186,7 @@ func (s *PostgresService) Resolver() *deploymentcontext.Resolver {
 func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID string, previewID *int64) (deploymentcontext.DeploymentSource, error) {
 	var src deploymentcontext.DeploymentSource
 	var imgName, imgTag, dfLoc, fqdn, gitRepo, gitBranch *string
-	var dockerfile, composeRaw, composeLoc, portsExposes, baseDir, publishDir, customLabels, customRunOpts *string
+	var dockerfile, composeRaw, composeLoc, portsExposes, portsMappings, redirect, baseDir, publishDir, customLabels, customRunOpts *string
 	var hcPath, hcPort, hcHost, hcMethod, hcScheme, hcRespText *string
 	var hcEnabled bool
 	var hcRetCode, hcInterval, hcTimeout, hcRetries, hcStartPeriod int
@@ -201,6 +206,7 @@ func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID str
 		       a.build_pack, a.docker_registry_image_name, a.docker_registry_image_tag,
 		       a.dockerfile_location, a.fqdn, a.git_repository, a.git_branch,
 		       a.dockerfile, a.docker_compose_raw, a.docker_compose_location, a.ports_exposes,
+		       a.ports_mappings, COALESCE(a.redirect, 'both'),
 		       a.base_directory, a.publish_directory, a.custom_labels, a.custom_docker_run_options,
 		       COALESCE(a.health_check_enabled, FALSE), a.health_check_path, a.health_check_port,
 		       a.health_check_host, a.health_check_method, COALESCE(a.health_check_return_code, 200),
@@ -226,6 +232,7 @@ func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID str
 		&src.BuildPack, &imgName, &imgTag,
 		&dfLoc, &fqdn, &gitRepo, &gitBranch,
 		&dockerfile, &composeRaw, &composeLoc, &portsExposes,
+		&portsMappings, &redirect,
 		&baseDir, &publishDir, &customLabels, &customRunOpts,
 		&hcEnabled, &hcPath, &hcPort,
 		&hcHost, &hcMethod, &hcRetCode,
@@ -269,6 +276,8 @@ func (s *PostgresService) LoadApplicationSource(ctx context.Context, appUUID str
 	setOpt("docker_compose_raw", composeRaw)
 	setOpt("docker_compose_location", composeLoc)
 	setOpt("ports_exposes", portsExposes)
+	setOpt("ports_mappings", portsMappings)
+	setOpt("redirect", redirect)
 	setOpt("base_directory", baseDir)
 	setOpt("publish_directory", publishDir)
 	setOpt("custom_labels", customLabels)
@@ -492,6 +501,7 @@ func (s *PostgresService) loadByUUID(ctx context.Context, uuid string) (Applicat
 		       COALESCE(a.docker_registry_image_name, ''), COALESCE(a.docker_registry_image_tag, ''),
 		       COALESCE(a.dockerfile_location, ''), COALESCE(a.docker_compose_location, '/docker-compose.yaml'),
 		       COALESCE(a.docker_compose_raw, ''), COALESCE(a.ports_exposes, ''),
+		       COALESCE(a.ports_mappings, ''), COALESCE(a.redirect, 'both'),
 		       COALESCE(a.base_directory, '/'), COALESCE(a.publish_directory, ''),
 		       COALESCE(a.install_command, ''), COALESCE(a.build_command, ''), COALESCE(a.start_command, ''),
 		       COALESCE(a.custom_labels, ''), COALESCE(a.custom_docker_run_options, ''),
@@ -520,6 +530,7 @@ func (s *PostgresService) loadByUUID(ctx context.Context, uuid string) (Applicat
 		&a.DockerRegistryImageName, &a.DockerRegistryImageTag,
 		&a.DockerfileLocation, &a.DockerComposeLocation,
 		&a.DockerComposeRaw, &a.PortsExposes,
+		&a.PortsMappings, &a.Redirect,
 		&a.BaseDirectory, &a.PublishDirectory,
 		&a.InstallCommand, &a.BuildCommand, &a.StartCommand,
 		&a.CustomLabels, &a.CustomDockerRunOptions,
@@ -917,21 +928,28 @@ func (s *PostgresService) Create(ctx context.Context, principal auth.Principal, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	redirect := strings.TrimSpace(in.Redirect)
+	if redirect == "" {
+		redirect = "both"
+	}
+
 	var appID int64
 	var updatedAt time.Time
 	err = tx.QueryRow(ctx, `
 		INSERT INTO applications (
 			uuid, name, description, fqdn, git_repository, git_branch, build_pack,
 			docker_registry_image_name, docker_registry_image_tag, dockerfile_location,
-			docker_compose_location, docker_compose_raw, ports_exposes, base_directory, publish_directory,
+			docker_compose_location, docker_compose_raw, ports_exposes, ports_mappings, redirect,
+			base_directory, publish_directory,
 			status, environment_id, destination_id, private_key_id, source_id, source_type,
 			manual_webhook_secret_github, dockerfile
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'exited',$16,$17,$18,$19,$20,$21,$22)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'exited',$18,$19,$20,$21,$22,$23,$24)
 		RETURNING id, updated_at
 	`, row.UUID, name, compat.SanitizeString(in.Description), strings.TrimSpace(in.FQDN),
 		strings.TrimSpace(in.GitRepository), branch, bp,
 		strings.TrimSpace(in.DockerRegistryImageName), strings.TrimSpace(in.DockerRegistryImageTag),
 		strings.TrimSpace(in.DockerfileLocation), composeLoc, in.DockerComposeRaw, strings.TrimSpace(in.PortsExposes),
+		strings.TrimSpace(in.PortsMappings), redirect,
 		baseDir, strings.TrimSpace(in.PublishDirectory),
 		envID, destID, appPrivateKeyID, sourceID, sourceType, in.WebhookSecretGitHub, in.Dockerfile,
 	).Scan(&appID, &updatedAt)
@@ -1150,11 +1168,13 @@ func (s *PostgresService) ListDeploymentsByApplication(ctx context.Context, prin
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT deployment_uuid, application_id, COALESCE(server_name, 'localhost'), status,
-		       force_rebuild, is_webhook, is_api, created_at, updated_at
-		FROM application_deployment_queues
-		WHERE application_id = $1
-		ORDER BY id DESC
+		SELECT q.deployment_uuid, q.application_id, COALESCE(q.server_name, 'localhost'), q.status,
+		       COALESCE(q.logs, ''), COALESCE(j.last_error, ''),
+		       q.force_rebuild, q.is_webhook, q.is_api, q.created_at, q.updated_at
+		FROM application_deployment_queues q
+		LEFT JOIN go_job_operations j ON j.operation_id = ('deploy-' || q.deployment_uuid)
+		WHERE q.application_id = $1
+		ORDER BY q.id DESC
 		LIMIT 50
 	`, a.ID)
 	if err != nil {
@@ -1164,12 +1184,19 @@ func (s *PostgresService) ListDeploymentsByApplication(ctx context.Context, prin
 	out := make([]DeploymentRecord, 0)
 	for rows.Next() {
 		var d DeploymentRecord
+		var lastErr string
 		d.ApplicationUUID = a.UUID
 		if err := rows.Scan(&d.DeploymentUUID, &d.ApplicationID, &d.ServerUUID, &d.Status,
+			&d.Logs, &lastErr,
 			&d.ForceRebuild, &d.IsWebhook, &d.IsAPI, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		d.OperationID = "deploy-" + d.DeploymentUUID
+		if d.Logs == "" && lastErr != "" {
+			d.Logs = lastErr
+		} else if d.Logs != "" && lastErr != "" && !strings.Contains(d.Logs, lastErr) {
+			d.Logs = d.Logs + "\n" + lastErr
+		}
 		out = append(out, d)
 	}
 	return out, rows.Err()

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { navigation, type NavigationEntry } from '../lib/navigation';
 import { session, loadSession } from '../lib/session';
 import AppIcon from './AppIcon.vue';
 defineProps<{ mobile?: boolean }>();
 const submenu = ref('');
-const pathname = ref('/');
+const pathname = ref(typeof window !== 'undefined' ? window.location.pathname : '/');
 const role = computed(() =>
     session.me?.teams.find((team) => team.id === session.me?.session_team_id)?.role?.toLowerCase(),
 );
@@ -32,13 +32,22 @@ function active(href?: string): boolean {
             !menuItems.value.some((item) => item.href !== href && item.href === path))
     );
 }
-onMounted(() => {
+function syncPathname() {
     pathname.value = window.location.pathname;
     const parent = navigation
         .flatMap((group) => group.entries)
         .find((item) => item.children?.some((child) => active(child.href)));
-    submenu.value = parent?.id ?? '';
+    if (parent?.id) submenu.value = parent.id;
+}
+onMounted(() => {
+    syncPathname();
+    window.addEventListener('popstate', syncPathname);
+    window.addEventListener('coolify:navigate', syncPathname);
     void loadSession().catch(() => {});
+});
+onBeforeUnmount(() => {
+    window.removeEventListener('popstate', syncPathname);
+    window.removeEventListener('coolify:navigate', syncPathname);
 });
 function openSearch() {
     window.dispatchEvent(new Event('open-global-search'));

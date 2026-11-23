@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { navigateTo } from '../../lib/navigation';
 import { session, loadSession, selectSessionTeam, type SessionTeam } from '../../lib/session';
 export type TeamInfo = SessionTeam;
 defineProps<{ currentTeamId?: number }>();
@@ -19,7 +20,7 @@ async function switchTeam(teamId: number) {
         emit('switched', session.me?.session_team_id ?? teamId);
         if (menu.value) menu.value.open = false;
         // The original switcher returns to the new team's dashboard.
-        window.location.assign('/');
+        navigateTo('/');
     } catch (err) {
         error.value = (err as Error).message;
     } finally {

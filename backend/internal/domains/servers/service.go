@@ -142,6 +142,9 @@ func (s *ServerService) Update(ctx context.Context, principal auth.Principal, se
 	if input.User != nil && strings.TrimSpace(*input.User) != "" {
 		srv.User = strings.TrimSpace(*input.User)
 	}
+	if input.WildcardDomain != nil {
+		srv.WildcardDomain = strings.TrimSpace(*input.WildcardDomain)
+	}
 
 	saved, err := s.repo.Save(ctx, srv)
 	if err != nil {

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import AppIcon from '../../components/AppIcon.vue';
 import ResourceCreate from './ResourceCreate.vue';
 import CanvasGraph from '../canvas/CanvasGraph.vue';
 import { apiRequest } from '../../lib/api';
+import { navigateTo } from '../../lib/navigation';
 import { session } from '../../lib/session';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
@@ -211,7 +212,7 @@ async function save() {
             const next = props.projectUuid
                 ? `/project/${props.projectUuid}/environment/${result.uuid}`
                 : `/project/${result.project.uuid}`;
-            window.location.assign(next);
+            navigateTo(next);
         } else {
             await load();
             status.value = 'Saved.';
@@ -231,7 +232,7 @@ async function remove() {
             `/api/v1/projects/${props.projectUuid}${props.environmentUuid ? `/environments/${props.environmentUuid}` : ''}`,
             { method: 'DELETE' },
         );
-        window.location.assign(
+        navigateTo(
             props.environmentUuid ? `/project/${props.projectUuid}` : '/projects',
         );
     } catch (err) {
@@ -243,6 +244,14 @@ function setView(value: 'table' | 'grid' | 'canvas') {
     view.value = value;
     if (value !== 'canvas') localStorage.setItem(`coolify-${scope.value}-view`, value);
 }
+watch(
+    () => [props.projectUuid, props.environmentUuid, props.subpage],
+    () => {
+        status.value = '';
+        error.value = '';
+        void load();
+    },
+);
 onMounted(() => {
     view.value = localStorage.getItem(`coolify-${scope.value}-view`) === 'grid' ? 'grid' : 'table';
     void load();

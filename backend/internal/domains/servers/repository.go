@@ -25,8 +25,9 @@ type Server struct {
 	User             string    `json:"user"`
 	TeamID           int64     `json:"team_id"`
 	PrivateKeyID     int64     `json:"private_key_id"`
-	PrivateKeyUUID   string    `json:"private_key_uuid,omitempty"`
-	IsReachable      bool      `json:"is_reachable"`
+	PrivateKeyUUID   string     `json:"private_key_uuid,omitempty"`
+	WildcardDomain   string     `json:"wildcard_domain,omitempty"`
+	IsReachable      bool       `json:"is_reachable"`
 	IsUsable         bool      `json:"is_usable"`
 	ForceDisabled    bool      `json:"force_disabled"`
 	TransferredAt    *time.Time `json:"transferred_at,omitempty"`
@@ -59,6 +60,7 @@ type CreateServerInput struct {
 	User           string `json:"user"`
 	TeamID         int64  `json:"team_id"`
 	PrivateKeyUUID string `json:"private_key_uuid"`
+	WildcardDomain string `json:"wildcard_domain,omitempty"`
 }
 
 type UpdateServerInput struct {
@@ -68,6 +70,7 @@ type UpdateServerInput struct {
 	Port           *int    `json:"port,omitempty"`
 	User           *string `json:"user,omitempty"`
 	PrivateKeyUUID *string `json:"private_key_uuid,omitempty"`
+	WildcardDomain *string `json:"wildcard_domain,omitempty"`
 }
 
 type Repository interface {

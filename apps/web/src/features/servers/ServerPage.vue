@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
@@ -11,6 +11,7 @@ import WebTerminal from '../terminal/WebTerminal.vue';
 import LogViewer from '../logs/LogViewer.vue';
 import ServerTransferPanel from '../transfer/ServerTransferPanel.vue';
 import { apiRequest } from '../../lib/api';
+import { navigateTo } from '../../lib/navigation';
 import { session } from '../../lib/session';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
@@ -183,6 +184,7 @@ async function load() {
                 ip: server.value.ip,
                 user: server.value.user,
                 port: server.value.port,
+                wildcard_domain: (server.value as any).wildcard_domain ?? '',
             };
         else if (props.subpage === 'private-key') {
             keys.value = await apiRequest('/api/v1/security/keys', { signal: lifecycle.signal });
@@ -263,12 +265,20 @@ async function remove() {
     busy.value = true;
     try {
         await apiRequest(endpoint.value, { method: 'DELETE' });
-        window.location.assign('/servers');
+        navigateTo('/servers');
     } catch (err) {
         error.value = (err as Error).message;
         busy.value = false;
     }
 }
+watch(
+    () => [props.serverUuid, props.subpage],
+    () => {
+        message.value = '';
+        error.value = '';
+        void load();
+    },
+);
 onMounted(load);
 </script>
 
@@ -405,11 +415,9 @@ onMounted(load);
                             <SettingsSection
                                 title="Connection"
                                 helper="Configure how Goolify identifies, reaches, and validates this server."
-                                ><template
-                                    v-if="server.id !== 0"
-                                    #actions
+                                ><template #actions
                                     ><button
-                                        v-if="canEdit"
+                                        v-if="server.id !== 0 && canEdit"
                                         type="button"
                                         class="coolify-btn"
                                         :disabled="busy"
@@ -417,7 +425,14 @@ onMounted(load);
                                     >
                                         {{
                                             ready ? 'Revalidate connection' : 'Validate connection'
-                                        }}
+                                        }}</button
+                                    ><button
+                                        v-if="canEdit"
+                                        type="submit"
+                                        class="coolify-btn coolify-btn-primary"
+                                        :disabled="busy"
+                                    >
+                                        Save
                                     </button></template
                                 >
                                 <div class="form-grid">
@@ -432,11 +447,17 @@ onMounted(load);
                                             v-model="form.description"
                                             class="coolify-input"
                                             :readonly="!canEdit" /></label
-                                    ><label class="form-field full-span"
+                                    ><label class="form-field"
                                         >IP address or domain<input
                                             v-model="form.ip"
                                             class="coolify-input"
                                             required
+                                            :readonly="!canEdit" /></label
+                                    ><label class="form-field"
+                                        >Wildcard Domain<input
+                                            v-model="form.wildcard_domain"
+                                            class="coolify-input"
+                                            placeholder="https://example.com"
                                             :readonly="!canEdit" /></label
                                     ><label class="form-field"
                                         >SSH user<input

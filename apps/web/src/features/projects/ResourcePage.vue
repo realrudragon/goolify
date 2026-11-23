@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import AppIcon from '../../components/AppIcon.vue';
@@ -11,6 +11,7 @@ import BackupManager from '../backups/BackupManager.vue';
 import LogViewer from '../logs/LogViewer.vue';
 import WebTerminal from '../terminal/WebTerminal.vue';
 import { apiRequest } from '../../lib/api';
+import { navigateTo } from '../../lib/navigation';
 import { pushToast } from '../../lib/toast';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
@@ -81,7 +82,20 @@ const base = computed(
     () =>
         `/project/${props.projectUuid ?? resource.value?.project_uuid}/environment/${props.environmentUuid ?? resource.value?.environment_uuid}/${props.kind}/${props.uuid}`,
 );
-const section = computed(() => props.subpage.split('/')[0]);
+const section = computed(() => (props.subpage || 'general').split('/')[0] || 'general');
+const selectedDeploymentUuid = computed(() =>
+    (props.subpage || '').startsWith('deployment/')
+        ? props.subpage.slice('deployment/'.length)
+        : '',
+);
+const isFullWidthTab = computed(() => ['deployment', 'logs', 'terminal'].includes(section.value));
+const domainLinks = computed(() =>
+    String(resource.value?.fqdn ?? form.value?.fqdn ?? '')
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean)
+        .map((d) => (d.includes('://') ? d : `http://${d}`)),
+);
 const dirty = computed(
     () => JSON.stringify({ form: form.value, advanced: advancedSettings.value }) !== initial.value,
 );
@@ -145,6 +159,8 @@ async function load() {
                       git_branch: item.git_branch ?? '',
                       build_pack: item.build_pack ?? 'dockerfile',
                       ports_exposes: item.ports_exposes ?? '',
+                      ports_mappings: item.ports_mappings ?? '',
+                      redirect: item.redirect ?? 'both',
                       base_directory: item.base_directory ?? '/',
                       publish_directory: item.publish_directory ?? '',
                       dockerfile_location: item.dockerfile_location ?? '/Dockerfile',
@@ -180,6 +196,7 @@ async function load() {
                   ? {
                         name: item.name,
                         description: item.description ?? '',
+                        fqdn: item.fqdn ?? '',
                         docker_compose_raw: item.docker_compose_raw ?? '',
                     }
                   : {
@@ -243,6 +260,32 @@ async function load() {
         }
     } catch (err) {
         error.value = (err as Error).message;
+    }
+}
+async function generateDomain() {
+    if (!canEdit.value || !resource.value) return;
+    try {
+        const srvUuid = resource.value.server_uuid || 'localhost';
+        const srv = await apiRequest<{ ip?: string; wildcard_domain?: string }>(
+            `/api/v1/servers/${encodeURIComponent(srvUuid)}`,
+            { signal: lifecycle.signal },
+        );
+        const wc = (srv.wildcard_domain ?? '').trim().replace(/\/+$/, '');
+        if (wc) {
+            const hasScheme = wc.includes('://');
+            const [scheme, rest] = hasScheme ? wc.split('://') : ['http', wc];
+            const host = rest.replace(/^\*\./, '');
+            form.value.fqdn = `${scheme}://${props.uuid}.${host}`;
+        } else {
+            let ip = (srv.ip ?? '').trim();
+            if (!ip || ip === 'host.docker.internal' || ip === 'localhost') {
+                ip = (typeof window !== 'undefined' && window.location.hostname) || '127.0.0.1';
+            }
+            form.value.fqdn = `http://${props.uuid}.${ip}.sslip.io`;
+        }
+    } catch {
+        const host = (typeof window !== 'undefined' && window.location.hostname) || '127.0.0.1';
+        form.value.fqdn = `http://${props.uuid}.${host}.sslip.io`;
     }
 }
 async function save() {
@@ -364,7 +407,7 @@ async function rollbackTo(deploymentUuid: string) {
             { method: 'POST', body: JSON.stringify({ commit: deploymentUuid }) },
         );
         if (res.deployment_uuid) {
-            window.location.assign(`${base.value}/deployment/${res.deployment_uuid}`);
+            navigateTo(`${base.value}/deployment/${res.deployment_uuid}`);
         } else {
             status.value = 'Rollback queued.';
         }
@@ -385,7 +428,7 @@ async function action(name: string) {
                 deployments?: { deployment_uuid: string }[];
             }>(`/api/v1/deploy?uuid=${encodeURIComponent(props.uuid)}`, { method: 'POST' });
             const deployment = result.deployment_uuid ?? result.deployments?.[0]?.deployment_uuid;
-            if (deployment) window.location.assign(`${base.value}/deployment/${deployment}`);
+            if (deployment) navigateTo(`${base.value}/deployment/${deployment}`);
             else status.value = 'Deployment queued.';
         } else {
             await apiRequest(`${endpoint.value}/${name}`, { method: 'POST' });
@@ -434,7 +477,7 @@ async function remove() {
     busy.value = true;
     try {
         await apiRequest(endpoint.value, { method: 'DELETE' });
-        window.location.assign(
+        navigateTo(
             `/project/${props.projectUuid}/environment/${props.environmentUuid}`,
         );
     } catch (err) {
@@ -442,6 +485,14 @@ async function remove() {
         busy.value = false;
     }
 }
+watch(
+    () => [props.kind, props.uuid, props.subpage],
+    () => {
+        status.value = '';
+        error.value = '';
+        void load();
+    },
+);
 onMounted(load);
 </script>
 
@@ -458,6 +509,15 @@ onMounted(load);
                     class="status-badge"
                     :class="{ warning: !resource.status?.startsWith('running') }"
                     >{{ resource.status }}</span
+                ><a
+                    v-for="dUrl in domainLinks"
+                    :key="dUrl"
+                    :href="dUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="coolify-btn"
+                    :title="`Open ${dUrl}`"
+                    >{{ dUrl }} ↗</a
                 ><a
                     v-if="kind === 'application'"
                     :href="`${base}/deployment`"
@@ -530,8 +590,10 @@ onMounted(load);
         <div
             v-if="resource"
             class="settings-workspace"
+            :style="isFullWidthTab ? 'grid-template-columns: 1fr' : undefined"
         >
             <nav
+                v-if="!isFullWidthTab"
                 class="settings-sidebar"
                 aria-label="Resource configuration sections"
             >
@@ -579,16 +641,22 @@ onMounted(load);
                                           ? 'Application details'
                                           : 'Database details'
                                 "
-                                ><template
-                                    v-if="kind === 'service'"
-                                    #actions
+                                ><template #actions
                                     ><button
+                                        v-if="kind === 'service'"
                                         type="button"
                                         class="coolify-btn"
                                         :disabled="!canEdit"
                                         @click="composeDialog?.showModal()"
                                     >
-                                        Edit Compose File
+                                        Edit Compose File</button
+                                    ><button
+                                        v-if="canEdit && !(kind === 'database' && resource.id === 0)"
+                                        type="submit"
+                                        class="coolify-btn coolify-btn-primary"
+                                        :disabled="busy"
+                                    >
+                                        Save
                                     </button></template
                                 >
                                 <div class="form-grid">
@@ -605,22 +673,58 @@ onMounted(load);
                                             :readonly="!canEdit || (kind === 'database' && resource.id === 0)"
                                     /></label></div></SettingsSection
                             ><SettingsSection
-                                v-if="kind === 'application'"
+                                v-if="kind === 'application' || kind === 'service'"
                                 title="Access"
-                                ><div class="form-grid">
-                                    <label class="form-field"
+                                helper="Configure domain routing (Traefik / Caddy) and exposed container or host ports. Separate multiple domains with commas; append :port to route a domain to a specific container port."
+                                ><template #actions
+                                    ><button
+                                        v-if="canEdit"
+                                        type="button"
+                                        class="coolify-btn"
+                                        :disabled="busy"
+                                        @click="generateDomain"
+                                    >
+                                        Generate Domain</button
+                                    ><button
+                                        v-if="canEdit"
+                                        type="submit"
+                                        class="coolify-btn coolify-btn-primary"
+                                        :disabled="busy"
+                                    >
+                                        Save
+                                    </button></template
+                                >
+                                <div class="form-grid">
+                                    <label class="form-field full-span"
                                         >Domains<input
                                             v-model="form.fqdn"
                                             class="coolify-input"
-                                            placeholder="https://app.example.com"
+                                            placeholder="https://app.example.com,http://app.example.com:3000"
                                             :readonly="!canEdit" /></label
-                                    ><label class="form-field"
-                                        >Ports Exposes<input
-                                            v-model="form.ports_exposes"
-                                            class="coolify-input"
-                                            placeholder="80"
-                                            :readonly="!canEdit"
-                                    /></label></div></SettingsSection
+                                    ><template v-if="kind === 'application'"
+                                        ><label class="form-field"
+                                            >Direction<select
+                                                v-model="form.redirect"
+                                                class="coolify-input"
+                                                :disabled="!canEdit"
+                                            >
+                                                <option value="both">Allow www &amp; non-www</option>
+                                                <option value="non-www">Redirect to non-www</option>
+                                                <option value="www">Redirect to www</option>
+                                            </select></label
+                                        ><label class="form-field"
+                                            >Ports Exposes<input
+                                                v-model="form.ports_exposes"
+                                                class="coolify-input"
+                                                placeholder="80"
+                                                :readonly="!canEdit" /></label
+                                        ><label class="form-field"
+                                            >Ports Mappings<input
+                                                v-model="form.ports_mappings"
+                                                class="coolify-input"
+                                                placeholder="8080:80,3000:3000"
+                                                :readonly="!canEdit"
+                                        /></label></template></div></SettingsSection
                             ><SettingsSection
                                 v-if="kind === 'application'"
                                 title="Build &amp; deploy"
@@ -837,6 +941,7 @@ onMounted(load);
                 <DeploymentHistory
                     v-else-if="section === 'deployment'"
                     :application-uuid="uuid"
+                    :selected-deployment-uuid="selectedDeploymentUuid"
                 />
                 <ScheduleList
                     v-else-if="section === 'scheduled-tasks'"

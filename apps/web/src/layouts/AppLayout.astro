@@ -61,10 +61,16 @@ const { title = 'Goolify' } = Astro.props;
       drawer?.addEventListener('click', event => { const rect = drawer.getBoundingClientRect(); if (event.target === drawer && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) drawer.close(); });
       window.addEventListener('open-global-search', () => drawer?.close());
       window.addEventListener('open-help-feedback', () => drawer?.close());
-      const path = location.pathname;
-      const label = path === '/' ? 'Dashboard' : path.startsWith('/project') ? 'Projects' : path.startsWith('/server') ? 'Servers' : path.split('/').filter(Boolean).map(part => part.replaceAll('-', ' ')).slice(0, 2).join(' / ');
-      const breadcrumb = document.querySelector('[data-page-label]');
-      if (breadcrumb) breadcrumb.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+      function syncBreadcrumb() {
+        const path = location.pathname;
+        const label = path === '/' ? 'Dashboard' : path.startsWith('/project') ? 'Projects' : path.startsWith('/server') ? 'Servers' : path.split('/').filter(Boolean).map(part => part.replaceAll('-', ' ')).slice(0, 2).join(' / ');
+        const breadcrumb = document.querySelector('[data-page-label]');
+        if (breadcrumb) breadcrumb.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+        drawer?.close();
+      }
+      window.addEventListener('popstate', syncBreadcrumb);
+      window.addEventListener('coolify:navigate', syncBreadcrumb);
+      syncBreadcrumb();
       syncCollapse();
     </script>
   </body>

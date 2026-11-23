@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import AppIcon from '../../components/AppIcon.vue';
@@ -241,6 +241,14 @@ function changeTheme() {
             (profileTheme.value === 'system' && matchMedia('(prefers-color-scheme: dark)').matches),
     );
 }
+watch(
+    () => [props.page, props.subpage],
+    () => {
+        status.value = '';
+        error.value = '';
+        void load();
+    },
+);
 onMounted(() => {
     profileTheme.value = localStorage.getItem('theme') ?? 'system';
     void load();

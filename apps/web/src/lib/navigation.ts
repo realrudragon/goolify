@@ -144,3 +144,45 @@ export const navigation: Array<{ label?: string; entries: NavigationEntry[] }> =
         ],
     },
 ];
+
+export function isClientRoutablePath(pathname: string): boolean {
+    if (!pathname.startsWith('/')) return false;
+    for (const prefix of [
+        '/login',
+        '/register',
+        '/forgot-password',
+        '/reset-password',
+        '/auth/',
+        '/app/auth/',
+        '/api/',
+        '/canvas/api/',
+        '/terminal/ws',
+        '/realtime',
+    ]) {
+        if (pathname === prefix || pathname.startsWith(prefix)) return false;
+    }
+    return true;
+}
+
+export function navigateTo(href: string, replace = false): void {
+    if (typeof window === 'undefined') return;
+    try {
+        const url = new URL(href, window.location.origin);
+        if (url.origin !== window.location.origin || !isClientRoutablePath(url.pathname)) {
+            window.location.assign(href);
+            return;
+        }
+        const target = url.pathname + url.search + url.hash;
+        if (replace) {
+            window.history.replaceState({}, '', target);
+        } else if (window.location.pathname + window.location.search + window.location.hash !== target) {
+            window.history.pushState({}, '', target);
+        }
+        window.dispatchEvent(
+            new CustomEvent('coolify:navigate', { detail: { pathname: url.pathname } }),
+        );
+    } catch {
+        window.location.assign(href);
+    }
+}
+

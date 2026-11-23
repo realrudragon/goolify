@@ -30,6 +30,7 @@ services:
     build:
       context: .
       dockerfile: docker/stack-migration/Dockerfile
+    user: "0:0"
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8000}:8000"
@@ -47,12 +48,14 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - coolifydata:/data/coolify
+      - /data/coolify:/data/coolify
+      - /var/run/docker.sock:/var/run/docker.sock
 
   worker:
     build:
       context: .
       dockerfile: docker/stack-migration/Dockerfile
+    user: "0:0"
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/coolify-worker"]
     # The worker has no HTTP listener; container restart policy tracks process exits.
@@ -72,9 +75,9 @@ services:
       controlplane:
         condition: service_healthy
     volumes:
-      - coolifydata:/data/coolify
+      - /data/coolify:/data/coolify
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   pgdata:
   redisdata:
-  coolifydata:

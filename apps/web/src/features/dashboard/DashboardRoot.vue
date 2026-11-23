@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { apiRequest } from '../../lib/api';
+import { isClientRoutablePath, navigateTo } from '../../lib/navigation';
 import { resolveUIRoute } from '../../lib/ui-route';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 import ServerList from '../servers/ServerList.vue';
@@ -199,8 +200,54 @@ onMounted(() => {
     const openHelp = () => {
         showHelp.value = true;
     };
+    const onNavigate = () => {
+        resolveTabFromPath();
+    };
+    const onDocumentClick = (event: MouseEvent) => {
+        if (
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+        ) {
+            return;
+        }
+        const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+        if (!(target instanceof HTMLAnchorElement)) return;
+        if (
+            target.target === '_blank' ||
+            target.hasAttribute('download') ||
+            target.getAttribute('rel') === 'external'
+        ) {
+            return;
+        }
+        const rawHref = target.getAttribute('href');
+        if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) {
+            return;
+        }
+        try {
+            const url = new URL(target.href, window.location.origin);
+            if (url.origin !== window.location.origin || !isClientRoutablePath(url.pathname)) {
+                return;
+            }
+            event.preventDefault();
+            navigateTo(url.pathname + url.search + url.hash);
+        } catch {
+            // Fall through to native browser navigation
+        }
+    };
     window.addEventListener('open-help-feedback', openHelp);
-    lifecycle.registerCleanup(() => window.removeEventListener('open-help-feedback', openHelp));
+    window.addEventListener('popstate', onNavigate);
+    window.addEventListener('coolify:navigate', onNavigate);
+    document.addEventListener('click', onDocumentClick);
+    lifecycle.registerCleanup(() => {
+        window.removeEventListener('open-help-feedback', openHelp);
+        window.removeEventListener('popstate', onNavigate);
+        window.removeEventListener('coolify:navigate', onNavigate);
+        document.removeEventListener('click', onDocumentClick);
+    });
 });
 
 onBeforeUnmount(() => {

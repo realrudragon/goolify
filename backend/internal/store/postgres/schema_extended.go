@@ -10,6 +10,9 @@ import (
 func ensureExtendedBaselineSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	stmts := []string{
 		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS dockerfile TEXT NULL`,
+		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS ports_mappings TEXT NULL`,
+		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS redirect TEXT NOT NULL DEFAULT 'both'`,
+		`ALTER TABLE services ADD COLUMN IF NOT EXISTS fqdn TEXT NULL`,
 		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS base_directory TEXT NOT NULL DEFAULT '/'`,
 		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS publish_directory TEXT NULL`,
 		`ALTER TABLE applications ADD COLUMN IF NOT EXISTS install_command TEXT NULL`,

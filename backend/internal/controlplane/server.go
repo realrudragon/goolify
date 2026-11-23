@@ -1353,6 +1353,8 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 			DockerComposeLocation   *string           `json:"docker_compose_location"`
 			DockerComposeRaw        *string           `json:"docker_compose_raw"`
 			PortsExposes            *string           `json:"ports_exposes"`
+			PortsMappings           *string           `json:"ports_mappings"`
+			Redirect                *string           `json:"redirect"`
 			BaseDirectory           *string           `json:"base_directory"`
 			PublishDirectory        *string           `json:"publish_directory"`
 			InstallCommand          *string           `json:"install_command"`
@@ -1424,6 +1426,12 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 		}
 		if body.PortsExposes != nil {
 			appRec.PortsExposes = strings.TrimSpace(*body.PortsExposes)
+		}
+		if body.PortsMappings != nil {
+			appRec.PortsMappings = strings.TrimSpace(*body.PortsMappings)
+		}
+		if body.Redirect != nil && strings.TrimSpace(*body.Redirect) != "" {
+			appRec.Redirect = strings.TrimSpace(*body.Redirect)
 		}
 		if body.BaseDirectory != nil {
 			appRec.BaseDirectory = strings.TrimSpace(*body.BaseDirectory)
@@ -1534,8 +1542,9 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 				health_check_timeout = $31, health_check_retries = $32, health_check_start_period = $33,
 				limits_memory = $34, limits_memory_swap = $35, limits_memory_swappiness = $36,
 				limits_memory_reservation = $37, limits_cpus = $38, limits_cpuset = $39, limits_cpu_shares = $40,
+				ports_mappings = $41, redirect = $42,
 				updated_at = NOW()
-			WHERE id = $41
+			WHERE id = $43
 		`,
 			appRec.Name, appRec.Description, appRec.FQDN, appRec.GitRepository, appRec.GitBranch, appRec.BuildPack,
 			appRec.DockerRegistryImageName, appRec.DockerRegistryImageTag, appRec.Dockerfile,
@@ -1549,6 +1558,7 @@ func (a *App) handleApplications(w http.ResponseWriter, r *http.Request, p auth.
 			appRec.HealthCheckTimeout, appRec.HealthCheckRetries, appRec.HealthCheckStartPeriod,
 			appRec.LimitsMemory, appRec.LimitsMemorySwap, appRec.LimitsMemorySwappiness,
 			appRec.LimitsMemoryReservation, appRec.LimitsCPUs, appRec.LimitsCPUSet, appRec.LimitsCPUShares,
+			appRec.PortsMappings, orDefaultStr(appRec.Redirect, "both"),
 			appRec.ID,
 		)
 		if len(body.Settings) > 0 {
@@ -1717,7 +1727,36 @@ func (a *App) handleDeployments(w http.ResponseWriter, r *http.Request, p auth.P
 			writeDomainError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, spec)
+		depUUID := strings.TrimPrefix(opID, "deploy-")
+		var qLogs string
+		_ = a.Pool.QueryRow(r.Context(), `SELECT COALESCE(logs, '') FROM application_deployment_queues WHERE deployment_uuid = $1`, depUUID).Scan(&qLogs)
+		if qLogs == "" && a.LogStore != nil {
+			if entries, _, lErr := a.LogStore.ReplayFrom(r.Context(), spec.ResourceUUID, 0, 200); lErr == nil {
+				var lines []string
+				for _, e := range entries {
+					lines = append(lines, e.Text)
+				}
+				qLogs = strings.Join(lines, "\n")
+			}
+		}
+		if qLogs == "" && spec.LastError != "" {
+			qLogs = spec.LastError
+		}
+		if spec.Payload == nil {
+			spec.Payload = make(map[string]any)
+		}
+		if qLogs != "" {
+			spec.Payload["logs"] = qLogs
+		}
+		writeJSON(w, http.StatusOK, struct {
+			jobs.DurableJobSpec
+			DeploymentUUID string `json:"deployment_uuid"`
+			Logs           string `json:"logs,omitempty"`
+		}{
+			DurableJobSpec: spec,
+			DeploymentUUID: depUUID,
+			Logs:           qLogs,
+		})
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
@@ -1905,6 +1944,7 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 		var body struct {
 			Name             *string `json:"name"`
 			Description      *string `json:"description"`
+			FQDN             *string `json:"fqdn"`
 			DockerComposeRaw *string `json:"docker_compose_raw"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1939,8 +1979,8 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 				return
 			}
 		}
-		if body.DockerComposeRaw != nil {
-			svc, err := a.ServiceSvc.UpdateCompose(r.Context(), p, svcUUID, *body.DockerComposeRaw)
+		if body.DockerComposeRaw != nil || body.FQDN != nil {
+			svc, err := a.ServiceSvc.UpdateComposeAndFQDN(r.Context(), p, svcUUID, body.DockerComposeRaw, body.FQDN)
 			if err != nil {
 				writeDomainError(w, err)
 				return
@@ -1949,7 +1989,12 @@ func (a *App) handleServices(w http.ResponseWriter, r *http.Request, p auth.Prin
 			writeJSON(w, http.StatusOK, svc)
 			return
 		}
+		svc, err := a.ServiceSvc.GetByUUID(r.Context(), p, svcUUID)
 		_, _ = a.Dispatcher.FlushPending(r.Context())
+		if err == nil {
+			writeJSON(w, http.StatusOK, svc)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": sid, "uuid": svcUUID, "name": curName, "description": curDesc})
 		return
 	}
@@ -3320,4 +3365,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func orDefaultStr(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return strings.TrimSpace(v)
 }

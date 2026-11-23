@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import { apiRequest } from '../../lib/api';
+import { navigateTo } from '../../lib/navigation';
 import { session } from '../../lib/session';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
@@ -114,7 +115,8 @@ async function save() {
                     body: JSON.stringify({ name: name.value, network: network.value }),
                 },
             );
-            window.location.assign(`/destination/${created.uuid}`);
+            dialog.value?.close();
+            navigateTo(`/destination/${created.uuid}`);
             return;
         }
         dialog.value?.close();
@@ -139,7 +141,8 @@ async function remove() {
         await apiRequest(`/api/v1/destinations/${encodeURIComponent(destination.value.uuid)}`, {
             method: 'DELETE',
         });
-        window.location.assign('/destinations');
+        deleteDialog.value?.close();
+        navigateTo('/destinations');
     } catch (err) {
         error.value = (err as Error).message;
         saving.value = false;
@@ -157,6 +160,14 @@ function setMode(value: 'table' | 'grid') {
 function resourceHref(r: Resource) {
     return `/project/${r.project_uuid}/environment/${r.environment_uuid}/${r.type}/${r.uuid}`;
 }
+watch(
+    () => [props.destinationUuid, props.serverUuid, props.subpage],
+    () => {
+        message.value = '';
+        error.value = '';
+        void load();
+    },
+);
 onMounted(() => {
     mode.value = localStorage.getItem('coolify-destinations-view') === 'grid' ? 'grid' : 'table';
     void load();

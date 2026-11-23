@@ -174,6 +174,11 @@ func (r *Runner) ProcessOneJob(ctx context.Context) (bool, error) {
 		_, _ = r.cfg.LogStore.Append(ctx, spec.ResourceUUID, spec.OperationID, "stdout",
 			fmt.Sprintf("[worker %s] starting %s operation=%s epoch=%d", r.cfg.WorkerID, spec.JobType, spec.OperationID, lease.OwnershipEpoch))
 	}
+	if spec.JobType == "deploy" && r.cfg.Pool != nil {
+		if depUUID, ok := spec.Payload["deployment_uuid"].(string); ok && depUUID != "" {
+			_, _ = r.cfg.Pool.Exec(ctx, `UPDATE application_deployment_queues SET status = 'in_progress', updated_at = NOW() WHERE deployment_uuid = $1 AND status = 'queued'`, depUUID)
+		}
+	}
 
 	// Look up target server host/port/user & encrypted SSH key from PostgreSQL
 	srvID, host, port, user, decryptedKey := r.loadServerExecutionTarget(ctx, spec.ServerUUID)
@@ -301,8 +306,16 @@ func (r *Runner) finishJob(ctx context.Context, spec jobs.DurableJobSpec, lease 
 
 	switch spec.JobType {
 	case "deploy":
+		finalLogs := strings.TrimSpace(outputTail)
+		if errMsg != "" && !strings.Contains(finalLogs, errMsg) {
+			if finalLogs == "" {
+				finalLogs = "[error] " + errMsg
+			} else {
+				finalLogs = finalLogs + "\n[error] " + errMsg
+			}
+		}
 		if depUUID, ok := spec.Payload["deployment_uuid"].(string); ok && depUUID != "" {
-			_, _ = tx.Exec(ctx, `UPDATE application_deployment_queues SET status = $2, logs = NULLIF($3,''), updated_at = NOW() WHERE deployment_uuid = $1`, depUUID, uiStatus, outputTail)
+			_, _ = tx.Exec(ctx, `UPDATE application_deployment_queues SET status = $2, logs = NULLIF($3,''), updated_at = NOW() WHERE deployment_uuid = $1`, depUUID, uiStatus, finalLogs)
 		}
 		if status == jobs.StatusSucceeded {
 			_, _ = tx.Exec(ctx, `UPDATE applications SET status = 'running', updated_at = NOW() WHERE uuid = $1`, spec.ResourceUUID)

@@ -23,6 +23,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/stack-migration/Dockerfile
+    user: "0:0"
     ports:
       - "8000:8000"
     environment:
@@ -39,14 +40,16 @@ services:
       redis:
         condition: service_started
     volumes:
-      - coolifydata:/data/coolify
+      - /data/coolify:/data/coolify
+      - /var/run/docker.sock:/var/run/docker.sock
 
   worker:
     build:
       context: ../..
       dockerfile: docker/stack-migration/Dockerfile
+    user: "0:0"
     entrypoint: ["/usr/local/bin/coolify-worker"]
-    # The worker has no HTTP listener; do not inherit the control-plane probe.
+    # The worker has no HTTP listener; do not inherit the image HTTP probe.
     healthcheck:
       disable: true
     command: ["-executor-bin", "/usr/local/bin/coolify-executor", "-server-concurrency", "4"]
@@ -61,9 +64,9 @@ services:
       redis:
         condition: service_started
     volumes:
-      - coolifydata:/data/coolify
+      - /data/coolify:/data/coolify
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   pgdata:
   redisdata:
-  coolifydata:

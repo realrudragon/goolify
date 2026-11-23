@@ -699,7 +699,12 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await clickText('Restart Proxy');
     await cdp.waitFor(`document.body.innerText.includes('Proxy restart queued') || document.body.innerText.includes('running')`);
 
-    // 4. Server Advanced Settings (/server/localhost/advanced)
+    // 4. Server General Wildcard Domain & Advanced Settings (/server/localhost & /server/localhost/advanced)
+    await navigatePage('/server/localhost', 'server');
+    await fillLabel('Wildcard Domain', 'https://apps.coolify.e2e.test');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+
     await navigatePage('/server/localhost/advanced', 'server');
     await fillLabel('Server Timezone', 'Asia/Bangkok');
     await clickText('Save');
@@ -707,14 +712,38 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     const savedTz = await cdp.eval(`fetch('/api/v1/servers/localhost/advanced').then(r => r.json()).then(d => d.server_timezone)`);
     assert.equal(savedTz, 'Asia/Bangkok');
 
-    // 5. Application restored subpages: healthcheck, resource-limits, storage, servers, rollback, metrics
+    // 5. Application Domain Configuration (Generate Domain, Direction, Ports Mappings), zero-flicker SPA tab switch & restored subpages
     const { uuid, project, environment } = applicationDeepLink;
     const appBase = `/project/${project}/environment/${environment}/application/${uuid}`;
 
-    await navigatePage(`${appBase}/healthcheck`, 'application');
+    await navigatePage(appBase, 'application');
+    await cdp.eval(`window.__spaNoReloadMarker = 'intact'`);
+    await clickText('Generate Domain');
+    await cdp.waitFor(`Boolean(Array.from(document.querySelectorAll('main label')).find(l => l.textContent.trim().startsWith('Domains'))?.querySelector('input')?.value)`);
+    const generatedDomain = await cdp.eval(`(() => {
+      const lbl = Array.from(document.querySelectorAll('main label')).find(l => l.textContent.trim().startsWith('Domains'));
+      return lbl?.querySelector('input')?.value || '';
+    })()`);
+    assert.equal(generatedDomain, `https://${uuid}.apps.coolify.e2e.test`);
+    await fillLabel('Ports Mappings', '18080:80');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+    const hasHeaderDomainLink = await cdp.eval(`Array.from(document.querySelectorAll('main a[target="_blank"]')).some(a => a.href.includes(${JSON.stringify(uuid + '.apps.coolify.e2e.test')}))`);
+    assert.equal(hasHeaderDomainLink, true, 'expected clickable external domain link in application header');
+
+    // Click internal subpage link and verify zero-flicker SPA transition (no full page reload)
+    await cdp.eval(`document.querySelector('a[href="${appBase}/healthcheck"]').click()`);
+    await cdp.waitFor(`window.location.pathname === '${appBase}/healthcheck'`);
+    assert.equal(await cdp.eval(`window.__spaNoReloadMarker`), 'intact', 'subpage link click must navigate via SPA without unloading window');
     await fillLabel('Path', '/healthz');
     await clickText('Save');
     await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+
+    // Click Deployments tab and verify Deployment Logs panel renders full-width without Configuration sidebar
+    await cdp.eval(`document.querySelector('nav.resource-tabs a[href="${appBase}/deployment"]').click()`);
+    await cdp.waitFor(`window.location.pathname === '${appBase}/deployment' && document.querySelector('.deployment-log-panel') !== null`);
+    assert.equal(await cdp.eval(`window.__spaNoReloadMarker`), 'intact', 'resource tab click must navigate via SPA without unloading window');
+    assert.equal(await cdp.eval(`document.querySelector('main .settings-sidebar') === null`), true, 'Deployments tab must not show Configuration left sidebar');
 
     await navigatePage(`${appBase}/resource-limits`, 'application');
     await fillLabel('Memory Limit (e.g. 512m, 2g, 0 = unlimited)', '512m');
