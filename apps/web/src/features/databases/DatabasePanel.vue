@@ -39,12 +39,14 @@ const isPublic = ref(false);
 const status = ref('');
 
 async function loadAll() {
+  const token = lifecycle.beginLoad();
   try {
     const [dbList, projList, srvList] = await Promise.all([
-      apiRequest<DatabaseItem[]>('/api/v1/databases', { signal: lifecycle.signal }).catch(() => []),
-      apiRequest<ProjectWithEnvs[]>('/api/v1/projects', { signal: lifecycle.signal }).catch(() => []),
-      apiRequest<Array<{ uuid: string; name: string }>>('/api/v1/servers', { signal: lifecycle.signal }).catch(() => []),
+      apiRequest<DatabaseItem[]>('/api/v1/databases', { signal: token.signal }).catch(() => []),
+      apiRequest<ProjectWithEnvs[]>('/api/v1/projects', { signal: token.signal }).catch(() => []),
+      apiRequest<Array<{ uuid: string; name: string }>>('/api/v1/servers', { signal: token.signal }).catch(() => []),
     ]);
+    if (!token.isCurrent()) return;
     databases.value = dbList;
     projects.value = projList;
     servers.value = srvList;
@@ -52,6 +54,7 @@ async function loadAll() {
       selectedProjectUuid.value = projList[0].uuid;
       await loadProjectEnvs(projList[0].uuid);
     }
+    if (!token.isCurrent()) return;
     if (srvList.length > 0 && !srvList.some((s) => s.uuid === selectedServerUuid.value)) {
       selectedServerUuid.value = srvList[0].uuid;
     }
@@ -61,6 +64,7 @@ async function loadAll() {
       isPublic.value = Boolean(cur.is_public);
     }
   } catch {
+    if (!token.isCurrent()) return;
     databases.value = [];
   }
 }

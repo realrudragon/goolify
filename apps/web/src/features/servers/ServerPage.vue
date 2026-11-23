@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
+import MetricsChart from '../../components/MetricsChart.vue';
 import DestinationsPage from './DestinationsPage.vue';
 import RegistriesPage from './RegistriesPage.vue';
 import ProxyConfig from '../proxy/ProxyConfig.vue';
@@ -132,7 +133,44 @@ const fields: Record<string, Field[]> = {
         { key: 'logdrain_custom_config', label: 'Custom configuration', type: 'textarea' },
         { key: 'logdrain_custom_config_parser', label: 'Custom parser', type: 'textarea' },
     ],
+    advanced: [
+        { key: 'server_timezone', label: 'Server Timezone' },
+        { key: 'wildcard_domain', label: 'Wildcard Domain' },
+        { key: 'concurrent_builds', label: 'Concurrent Builds', type: 'number', min: 1, max: 32 },
+        {
+            key: 'server_disk_usage_notification_threshold',
+            label: 'Disk Usage Alert Threshold (%)',
+            type: 'number',
+            min: 1,
+            max: 100,
+        },
+        { key: 'is_build_server', label: 'Use as Build Server', type: 'checkbox' },
+        { key: 'is_terminal_enabled', label: 'Enable Web Terminal', type: 'checkbox' },
+        { key: 'generate_exact_labels', label: 'Generate Exact Traefik Labels', type: 'checkbox' },
+    ],
+    swarm: [
+        { key: 'is_swarm_manager', label: 'Docker Swarm Manager', type: 'checkbox' },
+        { key: 'is_swarm_worker', label: 'Docker Swarm Worker', type: 'checkbox' },
+    ],
+    images: [
+        { key: 'is_image_scan_enabled', label: 'Enable Automatic Image Vulnerability Scanning', type: 'checkbox' },
+    ],
+    'github-runners': [
+        { key: 'enabled', label: 'Enable GitHub Actions Runner', type: 'checkbox' },
+        { key: 'repository_url', label: 'Repository / Org URL' },
+        { key: 'runner_labels', label: 'Runner Labels (comma-separated)' },
+    ],
 };
+const subpageApiPath: Record<string, string> = {
+    swarm: 'advanced',
+    images: 'image-scanning',
+};
+const metricsData = ref<{
+    has_metrics: boolean;
+    latest?: { cpu_percent: number; memory_percent: number; disk_percent: number; recorded_at: string };
+    history: { cpu_percent: number; memory_percent: number; disk_percent: number; recorded_at: string }[];
+}>({ has_metrics: false, history: [] });
+const containersData = ref<Record<string, any>[]>([]);
 const subTitle = computed(() => menu.find((m) => m[1] === props.subpage)?.[0] ?? props.subpage);
 async function load() {
     error.value = '';
@@ -149,14 +187,32 @@ async function load() {
         else if (props.subpage === 'private-key') {
             keys.value = await apiRequest('/api/v1/security/keys', { signal: lifecycle.signal });
             form.value = { private_key_uuid: server.value.private_key_uuid ?? '' };
-        } else if (fields[props.subpage])
-            form.value = await apiRequest(`${endpoint.value}/${props.subpage}`, {
+        } else if (fields[props.subpage]) {
+            const apiSub = subpageApiPath[props.subpage] ?? props.subpage;
+            form.value = await apiRequest(`${endpoint.value}/${apiSub}`, {
                 signal: lifecycle.signal,
             });
-        else if (props.subpage === 'resources')
+        } else if (props.subpage === 'resources')
             resources.value = await apiRequest(`${endpoint.value}/resources`, {
                 signal: lifecycle.signal,
             });
+        else if (props.subpage === 'metrics') {
+            metricsData.value = await apiRequest(`${endpoint.value}/metrics`, {
+                signal: lifecycle.signal,
+            });
+        } else if (props.subpage === 'analytics') {
+            const [m, c] = await Promise.all([
+                apiRequest<typeof metricsData.value>(`${endpoint.value}/metrics`, {
+                    signal: lifecycle.signal,
+                }),
+                apiRequest<{ containers?: Record<string, any>[] }>(
+                    `/canvas/api/servers/${encodeURIComponent(props.serverUuid)}/canvas/containers`,
+                    { signal: lifecycle.signal },
+                ),
+            ]);
+            metricsData.value = m;
+            containersData.value = c.containers ?? [];
+        }
         initial.value = JSON.stringify(form.value);
     } catch (err) {
         error.value = (err as Error).message;
@@ -171,8 +227,10 @@ async function save() {
         const body = fields[props.subpage]
             ? Object.fromEntries(fields[props.subpage].map((f) => [f.key, form.value[f.key]]))
             : form.value;
-        await apiRequest(endpoint.value + (fields[props.subpage] ? `/${props.subpage}` : ''), {
-            method: 'PATCH',
+        const apiSub = subpageApiPath[props.subpage] ?? props.subpage;
+        const method = props.subpage === 'github-runners' ? 'POST' : 'PATCH';
+        await apiRequest(endpoint.value + (fields[props.subpage] ? `/${apiSub}` : ''), {
+            method,
             body: JSON.stringify(body),
         });
         await load();
@@ -531,6 +589,122 @@ onMounted(load);
                             class="page-muted"
                         >
                             No resources found
+                        </p></SettingsSection
+                    >
+                    <SettingsSection
+                        v-else-if="subpage === 'metrics'"
+                        title="Metrics"
+                        ><template #actions
+                            ><button
+                                type="button"
+                                class="coolify-btn"
+                                :disabled="busy"
+                                @click="load"
+                            >
+                                Refresh
+                            </button></template
+                        >
+                        <div
+                            v-if="metricsData.has_metrics && metricsData.latest"
+                            class="form-grid"
+                        >
+                            <div class="form-field">
+                                <strong>CPU Usage</strong>
+                                <p>{{ Math.round(metricsData.latest.cpu_percent) }}%</p>
+                            </div>
+                            <div class="form-field">
+                                <strong>Memory Usage</strong>
+                                <p>{{ Math.round(metricsData.latest.memory_percent) }}%</p>
+                            </div>
+                            <div class="form-field">
+                                <strong>Disk Usage</strong>
+                                <p>{{ Math.round(metricsData.latest.disk_percent) }}%</p>
+                            </div>
+                        </div>
+                        <MetricsChart
+                            v-if="metricsData.history.length"
+                            :history="metricsData.history"
+                        />
+                        <div
+                            v-if="metricsData.history.length"
+                            class="original-table-scroll"
+                        >
+                            <table class="original-table">
+                                <thead>
+                                    <tr>
+                                        <th>Recorded At</th>
+                                        <th>CPU</th>
+                                        <th>Memory</th>
+                                        <th>Disk</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="(row, idx) in metricsData.history.slice(0, 20)"
+                                        :key="idx"
+                                    >
+                                        <td class="code-text">{{ row.recorded_at }}</td>
+                                        <td>{{ Math.round(row.cpu_percent) }}%</td>
+                                        <td>{{ Math.round(row.memory_percent) }}%</td>
+                                        <td>{{ Math.round(row.disk_percent) }}%</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p
+                            v-else
+                            class="page-muted"
+                        >
+                            No metrics samples recorded yet for this server.
+                        </p></SettingsSection
+                    >
+                    <SettingsSection
+                        v-else-if="subpage === 'analytics'"
+                        title="Analytics"
+                        ><div
+                            v-if="metricsData.has_metrics && metricsData.latest"
+                            class="form-grid"
+                        >
+                            <div class="form-field">
+                                <strong>CPU</strong>
+                                <p>{{ Math.round(metricsData.latest.cpu_percent) }}%</p>
+                            </div>
+                            <div class="form-field">
+                                <strong>Memory</strong>
+                                <p>{{ Math.round(metricsData.latest.memory_percent) }}%</p>
+                            </div>
+                            <div class="form-field">
+                                <strong>Disk</strong>
+                                <p>{{ Math.round(metricsData.latest.disk_percent) }}%</p>
+                            </div>
+                        </div>
+                        <div
+                            v-if="containersData.length"
+                            class="original-table-scroll"
+                        >
+                            <table class="original-table">
+                                <thead>
+                                    <tr>
+                                        <th>Container</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="(c, idx) in containersData"
+                                        :key="idx"
+                                    >
+                                        <td class="code-text">{{ c.name ?? c.id }}</td>
+                                        <td>{{ c.status ?? 'running' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p
+                            v-else
+                            class="page-muted"
+                        >
+                            No container telemetry reported yet.
                         </p></SettingsSection
                     >
                     <SettingsSection

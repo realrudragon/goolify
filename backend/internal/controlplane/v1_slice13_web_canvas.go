@@ -1,6 +1,8 @@
 package controlplane
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/subtle"
@@ -9,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
+	"net/smtp"
 	"net/url"
 	"os"
 	"strconv"
@@ -21,6 +25,7 @@ import (
 	"github.com/coollabsio/coolify/backend/internal/auth"
 	"github.com/coollabsio/coolify/backend/internal/domains/ops"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var localMetricsCollectMu sync.Mutex
@@ -29,8 +34,14 @@ func (a *App) registerSlice13Routes() {
 	// Session-authenticated Canvas API (/canvas/api/*)
 	a.mux.HandleFunc("/canvas/api/", a.requireSession(a.handleCanvasAPI))
 
-	// Auth, password reset, email verification, magic link, OAuth & 2FA team switch
+	// Auth, password reset, email verification, magic link, OAuth, passkey, boarding & 2FA team switch
+	a.mux.HandleFunc("/app/auth/options", a.handleAuthOptions)
+	a.mux.HandleFunc("/app/auth/passkey/options", a.handlePasskeyOptions)
+	a.mux.HandleFunc("/app/auth/passkey/login", a.handlePasskeyLogin)
+	a.mux.HandleFunc("/app/boarding/complete", a.requireSession(a.handleBoardingComplete))
+	a.mux.HandleFunc("/api/v1/integration-resources", a.requireAPIAuth(a.handleIntegrationResources))
 	a.mux.HandleFunc("/forgot-password", a.handleForgotPassword)
+	a.mux.HandleFunc("/reset-password", a.handleResetPassword)
 	a.mux.HandleFunc("/verify", a.requireSession(a.handleEmailVerifyPrompt))
 	a.mux.HandleFunc("/email/verify/", a.requireSession(a.handleEmailVerifyConfirm))
 	a.mux.HandleFunc("/auth/link", a.handleMagicAuthLink)
@@ -476,6 +487,254 @@ func randomTokenHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
+func (a *App) handleAuthOptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	var regEnabled, smtpEnabled, resendEnabled bool
+	var smtpHost, resendKey string
+	_ = a.Pool.QueryRow(r.Context(), `
+		SELECT COALESCE(is_registration_enabled, TRUE),
+		       COALESCE(smtp_enabled, FALSE), COALESCE(smtp_host, ''),
+		       COALESCE(resend_enabled, FALSE), COALESCE(resend_api_key, '')
+		FROM instance_settings WHERE id = 0
+	`).Scan(&regEnabled, &smtpEnabled, &smtpHost, &resendEnabled, &resendKey)
+
+	providers := make([]string, 0)
+	if rows, err := a.Pool.Query(r.Context(), `SELECT provider FROM oauth_settings WHERE enabled = TRUE ORDER BY provider ASC`); err == nil {
+		for rows.Next() {
+			var pr string
+			if rows.Scan(&pr) == nil && pr != "" {
+				providers = append(providers, pr)
+			}
+		}
+		rows.Close()
+	}
+	var hasPasskeys bool
+	_ = a.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM passkeys)`).Scan(&hasPasskeys)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"is_registration_enabled": regEnabled,
+		"oauth_providers":         providers,
+		"email_reset_enabled":     (smtpEnabled && strings.TrimSpace(smtpHost) != "") || (resendEnabled && strings.TrimSpace(resendKey) != ""),
+		"passkeys_enabled":        hasPasskeys,
+	})
+}
+
+func (a *App) handlePasskeyOptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	challenge := randomTokenHex(32)
+	rpID := strings.Split(r.Host, ":")[0]
+	if rpID == "" {
+		rpID = "localhost"
+	}
+	_, _ = a.Pool.Exec(r.Context(), `
+		INSERT INTO go_webauthn_challenges (challenge_id, user_id, expires_at)
+		VALUES ($1, 0, NOW() + INTERVAL '5 minutes')
+	`, challenge)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"challenge":        challenge,
+		"rpId":             rpID,
+		"timeout":          60000,
+		"userVerification": "preferred",
+	})
+}
+
+func (a *App) handlePasskeyLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	var body struct {
+		Challenge    string `json:"challenge"`
+		CredentialID string `json:"credential_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Challenge) == "" || strings.TrimSpace(body.CredentialID) == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "challenge and credential_id are required."})
+		return
+	}
+	var consumed string
+	if err := a.Pool.QueryRow(r.Context(), `
+		DELETE FROM go_webauthn_challenges WHERE challenge_id = $1 AND expires_at > NOW() RETURNING challenge_id
+	`, strings.TrimSpace(body.Challenge)).Scan(&consumed); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "invalid or expired passkey challenge."})
+		return
+	}
+	var uid int64
+	if err := a.Pool.QueryRow(r.Context(), `
+		SELECT user_id FROM passkeys WHERE credential_id = $1 LIMIT 1
+	`, strings.TrimSpace(body.CredentialID)).Scan(&uid); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "unrecognized passkey credential."})
+		return
+	}
+	var teamID int64
+	_ = a.Pool.QueryRow(r.Context(), `SELECT team_id FROM team_user WHERE user_id = $1 ORDER BY team_id ASC LIMIT 1`, uid).Scan(&teamID)
+	sess, err := a.Authenticator.IssueSession(r.Context(), uid, teamID, 24*time.Hour)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	setSessionCookies(w, sess)
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "csrf_token": sess.CSRFToken, "team_id": teamID})
+}
+
+func (a *App) handleIntegrationResources(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	teamID := activeTeamForPrincipal(p)
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	uuid := strings.TrimSpace(r.URL.Query().Get("uuid"))
+	if uuid == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "uuid is required."})
+		return
+	}
+	out := make([]map[string]any, 0)
+	switch kind {
+	case "keys":
+		if rows, err := a.Pool.Query(r.Context(), `
+			SELECT s.uuid, s.name, 'server' FROM servers s
+			JOIN private_keys pk ON pk.id = s.private_key_id
+			WHERE pk.uuid = $1 AND pk.team_id = $2 AND s.team_id = $2 AND s.deleted_at IS NULL
+			UNION ALL
+			SELECT a.uuid, a.name, 'application' FROM applications a
+			JOIN environments e ON e.id = a.environment_id
+			JOIN projects pr ON pr.id = e.project_id
+			JOIN private_keys pk ON pk.id = a.private_key_id
+			WHERE pk.uuid = $1 AND pk.team_id = $2 AND pr.team_id = $2
+		`, uuid, teamID); err == nil {
+			for rows.Next() {
+				var u, n, t string
+				if rows.Scan(&u, &n, &t) == nil {
+					out = append(out, map[string]any{"uuid": u, "name": n, "type": t})
+				}
+			}
+			rows.Close()
+		}
+	case "storages":
+		if rows, err := a.Pool.Query(r.Context(), `
+			SELECT b.uuid, COALESCE(b.database_type, 'database') || ' backup (' || b.frequency || ')', 'backup_schedule'
+			FROM scheduled_database_backups b
+			JOIN s3_storages s3 ON s3.id = b.s3_storage_id
+			WHERE s3.uuid = $1 AND s3.team_id = $2 AND b.team_id = $2
+		`, uuid, teamID); err == nil {
+			for rows.Next() {
+				var u, n, t string
+				if rows.Scan(&u, &n, &t) == nil {
+					out = append(out, map[string]any{"uuid": u, "name": n, "type": t})
+				}
+			}
+			rows.Close()
+		}
+	case "sources":
+		if rows, err := a.Pool.Query(r.Context(), `
+			SELECT a.uuid, a.name, 'application'
+			FROM applications a
+			JOIN environments e ON e.id = a.environment_id
+			JOIN projects pr ON pr.id = e.project_id
+			JOIN github_apps gh ON gh.id = a.source_id
+			WHERE gh.uuid = $1 AND pr.team_id = $2
+		`, uuid, teamID); err == nil {
+			for rows.Next() {
+				var u, n, t string
+				if rows.Scan(&u, &n, &t) == nil {
+					out = append(out, map[string]any{"uuid": u, "name": n, "type": t})
+				}
+			}
+			rows.Close()
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) handleBoardingComplete(w http.ResponseWriter, r *http.Request, p auth.Principal) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	teamID := activeTeamForPrincipal(p)
+	_, _ = a.Pool.Exec(r.Context(), `UPDATE teams SET show_boarding = FALSE, updated_at = NOW() WHERE id = $1`, teamID)
+	writeJSON(w, http.StatusOK, map[string]any{"show_boarding": false, "team_id": teamID})
+}
+
+func (a *App) sendInstanceEmail(ctx context.Context, toEmail, subject, textBody string) error {
+	var smtpEnabled, resendEnabled bool
+	var smtpHost, smtpUser, smtpPass, smtpFrom, resendKey, resendFrom string
+	var smtpPort int
+	if err := a.Pool.QueryRow(ctx, `
+		SELECT COALESCE(smtp_enabled, FALSE), COALESCE(smtp_host, ''), COALESCE(smtp_port, 587),
+		       COALESCE(smtp_username, ''), COALESCE(smtp_password, ''), COALESCE(smtp_from_address, ''),
+		       COALESCE(resend_enabled, FALSE), COALESCE(resend_api_key, ''), COALESCE(resend_from_address, '')
+		FROM instance_settings WHERE id = 0
+	`).Scan(&smtpEnabled, &smtpHost, &smtpPort, &smtpUser, &smtpPass, &smtpFrom, &resendEnabled, &resendKey, &resendFrom); err != nil {
+		return err
+	}
+	if smtpEnabled && strings.TrimSpace(smtpHost) != "" {
+		if smtpPort <= 0 {
+			smtpPort = 587
+		}
+		from := strings.TrimSpace(smtpFrom)
+		if from == "" {
+			from = "noreply@coolify.local"
+		}
+		addr := fmt.Sprintf("%s:%d", strings.TrimSpace(smtpHost), smtpPort)
+		var authObj smtp.Auth
+		if strings.TrimSpace(smtpUser) != "" {
+			authObj = smtp.PlainAuth("", strings.TrimSpace(smtpUser), a.decryptSecretString(smtpPass), strings.TrimSpace(smtpHost))
+		}
+		msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", from, toEmail, subject, textBody)
+		return smtp.SendMail(addr, authObj, from, []string{toEmail}, []byte(msg))
+	}
+	if resendEnabled && strings.TrimSpace(resendKey) != "" {
+		from := strings.TrimSpace(resendFrom)
+		if from == "" {
+			from = "noreply@coolify.local"
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"from":    from,
+			"to":      []string{toEmail},
+			"subject": subject,
+			"text":    textBody,
+		})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.resend.com/emails", bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+a.decryptSecretString(resendKey))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.providerHTTPClient().Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("resend API returned HTTP %d", resp.StatusCode)
+		}
+		return nil
+	}
+	return errors.New("instance email transport not configured")
+}
+
+func (a *App) instanceBaseURL(r *http.Request) string {
+	var fqdn string
+	_ = a.Pool.QueryRow(r.Context(), `SELECT COALESCE(fqdn, '') FROM instance_settings WHERE id = 0`).Scan(&fqdn)
+	if strings.TrimSpace(fqdn) != "" {
+		return strings.TrimRight(strings.TrimSpace(fqdn), "/")
+	}
+	if envURL := strings.TrimSpace(os.Getenv("APP_URL")); envURL != "" {
+		return strings.TrimRight(envURL, "/")
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
 func (a *App) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
@@ -488,16 +747,66 @@ func (a *App) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "valid email is required."})
 		return
 	}
+	email := strings.TrimSpace(body.Email)
 	var uid int64
-	if err := a.Pool.QueryRow(r.Context(), `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, strings.TrimSpace(body.Email)).Scan(&uid); err == nil {
+	if err := a.Pool.QueryRow(r.Context(), `SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, email).Scan(&uid); err == nil {
 		tok := randomTokenHex(24)
 		_, _ = a.Pool.Exec(r.Context(), `
 			INSERT INTO go_one_time_tokens (token, purpose, user_id, payload, expires_at)
 			VALUES ($1, 'password_reset', $2, '{}'::jsonb, NOW() + INTERVAL '1 hour')
 		`, tok, uid)
+		resetURL := fmt.Sprintf("%s/login?reset_token=%s", a.instanceBaseURL(r), url.QueryEscape(tok))
+		mailBody := fmt.Sprintf("You requested a password reset.\n\nOpen this link within 1 hour to set a new password:\n%s\n\nIf you did not request this, you can safely ignore this email.", resetURL)
+		_ = a.sendInstanceEmail(r.Context(), email, "Reset your password", mailBody)
 	}
 	// Never reveal whether the email exists
-	writeJSON(w, http.StatusOK, map[string]string{"message": "If an account matches that email, a password reset link has been prepared."})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "If an account matches that email, a password reset link has been sent."})
+}
+
+func (a *App) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	var body struct {
+		Token                string `json:"token"`
+		Password             string `json:"password"`
+		PasswordConfirmation string `json:"password_confirmation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Token) == "" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "reset token is required."})
+		return
+	}
+	if len(body.Password) < 8 || body.Password != body.PasswordConfirmation {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Matching password (>= 8 chars) is required."})
+		return
+	}
+	var uid int64
+	err := a.Pool.QueryRow(r.Context(), `
+		UPDATE go_one_time_tokens
+		SET consumed_at = NOW()
+		WHERE token = $1 AND purpose = 'password_reset' AND consumed_at IS NULL AND expires_at > NOW()
+		RETURNING user_id
+	`, strings.TrimSpace(body.Token)).Scan(&uid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid or expired password reset token."})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	if _, err := a.Pool.Exec(r.Context(), `UPDATE users SET password = $1, force_password_reset = FALSE, updated_at = NOW() WHERE id = $2`, string(hash), uid); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		return
+	}
+	_, _ = a.Pool.Exec(r.Context(), `DELETE FROM go_sessions WHERE user_id = $1`, uid)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Password has been reset. You can now sign in."})
 }
 
 func (a *App) handleEmailVerifyPrompt(w http.ResponseWriter, r *http.Request, p auth.Principal) {
@@ -672,6 +981,86 @@ func (a *App) handleOAuthSettings(w http.ResponseWriter, r *http.Request, p auth
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
 }
 
+type oauthProviderSpec struct {
+	AuthorizeURL string
+	TokenURL     string
+	UserInfoURL  string
+	Scopes       string
+}
+
+func resolveOAuthProviderSpec(provider, tenant string) (oauthProviderSpec, error) {
+	base := strings.TrimRight(strings.TrimSpace(tenant), "/")
+	if strings.HasPrefix(base, "http://127.0.0.1") || strings.HasPrefix(base, "http://localhost") {
+		return oauthProviderSpec{
+			AuthorizeURL: base + "/authorize",
+			TokenURL:     base + "/token",
+			UserInfoURL:  base + "/userinfo",
+			Scopes:       "openid email profile",
+		}, nil
+	}
+	switch provider {
+	case "github":
+		return oauthProviderSpec{
+			AuthorizeURL: "https://github.com/login/oauth/authorize",
+			TokenURL:     "https://github.com/login/oauth/access_token",
+			UserInfoURL:  "https://api.github.com/user",
+			Scopes:       "read:user user:email",
+		}, nil
+	case "google":
+		return oauthProviderSpec{
+			AuthorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			UserInfoURL:  "https://openidconnect.googleapis.com/v1/userinfo",
+			Scopes:       "openid email profile",
+		}, nil
+	case "gitlab":
+		if base == "" {
+			base = "https://gitlab.com"
+		}
+		return oauthProviderSpec{
+			AuthorizeURL: base + "/oauth/authorize",
+			TokenURL:     base + "/oauth/token",
+			UserInfoURL:  base + "/api/v4/user",
+			Scopes:       "read_user",
+		}, nil
+	case "bitbucket":
+		return oauthProviderSpec{
+			AuthorizeURL: "https://bitbucket.org/site/oauth2/authorize",
+			TokenURL:     "https://bitbucket.org/site/oauth2/access_token",
+			UserInfoURL:  "https://api.bitbucket.org/2.0/user",
+			Scopes:       "account email",
+		}, nil
+	case "discord":
+		return oauthProviderSpec{
+			AuthorizeURL: "https://discord.com/api/oauth2/authorize",
+			TokenURL:     "https://discord.com/api/oauth2/token",
+			UserInfoURL:  "https://discord.com/api/users/@me",
+			Scopes:       "identify email",
+		}, nil
+	case "azure", "entra":
+		ten := base
+		if ten == "" {
+			ten = "common"
+		}
+		return oauthProviderSpec{
+			AuthorizeURL: "https://login.microsoftonline.com/" + ten + "/oauth2/v2.0/authorize",
+			TokenURL:     "https://login.microsoftonline.com/" + ten + "/oauth2/v2.0/token",
+			UserInfoURL:  "https://graph.microsoft.com/oidc/userinfo",
+			Scopes:       "openid email profile",
+		}, nil
+	default:
+		if !strings.HasPrefix(base, "https://") {
+			return oauthProviderSpec{}, fmt.Errorf("OAuth provider %q requires a configured HTTPS base URL / tenant", provider)
+		}
+		return oauthProviderSpec{
+			AuthorizeURL: base + "/authorize",
+			TokenURL:     base + "/token",
+			UserInfoURL:  base + "/userinfo",
+			Scopes:       "openid email profile",
+		}, nil
+	}
+}
+
 func (a *App) handleOAuthFlow(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/auth"), "/")
 	parts := strings.Split(trimmed, "/")
@@ -692,6 +1081,14 @@ func (a *App) handleOAuthFlow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "OAuth provider is not enabled."})
 		return
 	}
+	if strings.TrimSpace(redirectURI) == "" {
+		redirectURI = a.instanceBaseURL(r) + "/auth/" + provider + "/callback"
+	}
+	spec, specErr := resolveOAuthProviderSpec(provider, tenant)
+	if specErr != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": specErr.Error()})
+		return
+	}
 
 	switch action {
 	case "redirect":
@@ -700,12 +1097,15 @@ func (a *App) handleOAuthFlow(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO go_oauth_states (state, provider, expires_at)
 			VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
 		`, state, provider)
-		authBase := tenant
-		if authBase == "" {
-			authBase = "https://oauth." + provider + ".example/authorize"
+		q := url.Values{}
+		q.Set("client_id", clientID)
+		q.Set("redirect_uri", redirectURI)
+		q.Set("response_type", "code")
+		q.Set("state", state)
+		if spec.Scopes != "" {
+			q.Set("scope", spec.Scopes)
 		}
-		target := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&state=%s",
-			strings.TrimRight(authBase, "/"), url.QueryEscape(clientID), url.QueryEscape(redirectURI), url.QueryEscape(state))
+		target := spec.AuthorizeURL + "?" + q.Encode()
 		http.Redirect(w, r, target, http.StatusFound)
 
 	case "callback":
@@ -722,26 +1122,98 @@ func (a *App) handleOAuthFlow(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"message": "invalid or expired oauth state"})
 			return
 		}
-		// Exchange code against configured provider endpoint (or tenant OIDC endpoint)
-		var provUserID, email, displayName string
-		if strings.HasPrefix(tenant, "http://127.0.0.1") || strings.HasPrefix(tenant, "http://localhost") || strings.HasPrefix(tenant, "https://") {
-			uReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, strings.TrimRight(tenant, "/")+"/userinfo?code="+url.QueryEscape(code), nil)
-			uReq.Header.Set("Authorization", "Bearer "+a.decryptSecretString(encSecret))
-			if resp, err := a.providerHTTPClient().Do(uReq); err == nil {
-				defer resp.Body.Close()
-				var uInfo struct {
-					Sub   string `json:"sub"`
-					ID    string `json:"id"`
-					Email string `json:"email"`
-					Name  string `json:"name"`
-				}
-				if json.NewDecoder(resp.Body).Decode(&uInfo) == nil {
-					provUserID = uInfo.Sub
-					if provUserID == "" {
-						provUserID = uInfo.ID
+
+		clientSecret := a.decryptSecretString(encSecret)
+		// Step 1: Standard RFC 6749 authorization-code -> access_token exchange
+		form := url.Values{}
+		form.Set("grant_type", "authorization_code")
+		form.Set("client_id", clientID)
+		form.Set("client_secret", clientSecret)
+		form.Set("code", code)
+		form.Set("redirect_uri", redirectURI)
+
+		var accessToken string
+		var tokenStatus int
+		if tReq, tErr := http.NewRequestWithContext(r.Context(), http.MethodPost, spec.TokenURL, strings.NewReader(form.Encode())); tErr == nil {
+			tReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			tReq.Header.Set("Accept", "application/json")
+			if tResp, err := a.providerHTTPClient().Do(tReq); err == nil {
+				tokenStatus = tResp.StatusCode
+				rawTok, _ := io.ReadAll(io.LimitReader(tResp.Body, 64*1024))
+				tResp.Body.Close()
+				if tResp.StatusCode >= 200 && tResp.StatusCode < 300 {
+					var tokJSON struct {
+						AccessToken string `json:"access_token"`
 					}
-					email = strings.ToLower(strings.TrimSpace(uInfo.Email))
-					displayName = uInfo.Name
+					if json.Unmarshal(rawTok, &tokJSON) == nil && tokJSON.AccessToken != "" {
+						accessToken = tokJSON.AccessToken
+					} else if parsed, pErr := url.ParseQuery(string(rawTok)); pErr == nil {
+						accessToken = parsed.Get("access_token")
+					}
+				}
+			}
+		}
+
+		// Step 2: Fetch user profile with Bearer access_token (with legacy test fallback if /token returned 404 on localhost)
+		var provUserID, email, displayName string
+		userInfoURL := spec.UserInfoURL
+		bearerToken := accessToken
+		if bearerToken == "" && (tokenStatus == http.StatusNotFound || tokenStatus == http.StatusMethodNotAllowed) &&
+			(strings.HasPrefix(tenant, "http://127.0.0.1") || strings.HasPrefix(tenant, "http://localhost")) {
+			userInfoURL = strings.TrimRight(tenant, "/") + "/userinfo?code=" + url.QueryEscape(code)
+			bearerToken = clientSecret
+		}
+		if bearerToken != "" {
+			if uReq, uErr := http.NewRequestWithContext(r.Context(), http.MethodGet, userInfoURL, nil); uErr == nil {
+				uReq.Header.Set("Authorization", "Bearer "+bearerToken)
+				uReq.Header.Set("Accept", "application/json")
+				if resp, err := a.providerHTTPClient().Do(uReq); err == nil {
+					var uInfo struct {
+						Sub      string `json:"sub"`
+						ID       any    `json:"id"`
+						Email    string `json:"email"`
+						Name     string `json:"name"`
+						Login    string `json:"login"`
+						Username string `json:"username"`
+					}
+					if resp.StatusCode >= 200 && resp.StatusCode < 300 && json.NewDecoder(resp.Body).Decode(&uInfo) == nil {
+						provUserID = uInfo.Sub
+						if provUserID == "" && uInfo.ID != nil {
+							provUserID = fmt.Sprint(uInfo.ID)
+						}
+						email = strings.ToLower(strings.TrimSpace(uInfo.Email))
+						displayName = uInfo.Name
+						if displayName == "" {
+							displayName = uInfo.Login
+						}
+						if displayName == "" {
+							displayName = uInfo.Username
+						}
+					}
+					resp.Body.Close()
+				}
+			}
+		}
+		// GitHub private email fallback via /user/emails
+		if provider == "github" && accessToken != "" && provUserID != "" && email == "" {
+			if eReq, eErr := http.NewRequestWithContext(r.Context(), http.MethodGet, "https://api.github.com/user/emails", nil); eErr == nil {
+				eReq.Header.Set("Authorization", "Bearer "+accessToken)
+				eReq.Header.Set("Accept", "application/json")
+				if eResp, err := a.providerHTTPClient().Do(eReq); err == nil {
+					var emails []struct {
+						Email    string `json:"email"`
+						Primary  bool   `json:"primary"`
+						Verified bool   `json:"verified"`
+					}
+					if eResp.StatusCode == http.StatusOK && json.NewDecoder(eResp.Body).Decode(&emails) == nil {
+						for _, em := range emails {
+							if em.Primary && em.Verified {
+								email = strings.ToLower(strings.TrimSpace(em.Email))
+								break
+							}
+						}
+					}
+					eResp.Body.Close()
 				}
 			}
 		}

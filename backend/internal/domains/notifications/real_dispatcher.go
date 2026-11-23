@@ -242,25 +242,105 @@ func (s *PostgresNotificationService) SendReal(ctx context.Context, teamID int64
 		}
 
 	case ChannelEmail:
-		if cfg.SMTPHost == "" || cfg.SMTPRecipient == "" {
+		eff := cfg
+		if eff.UseInstanceEmailSettings && s.pool != nil {
+			var instSMTPOn, instResendOn bool
+			var instHost, instUser, instPass, instFrom, instResKey, instResFrom string
+			var instPort int
+			if err := s.pool.QueryRow(ctx, `
+				SELECT COALESCE(smtp_enabled,FALSE), COALESCE(smtp_host,''), COALESCE(smtp_port,587),
+				       COALESCE(smtp_username,''), COALESCE(smtp_password,''), COALESCE(smtp_from_address,''),
+				       COALESCE(resend_enabled,FALSE), COALESCE(resend_api_key,''), COALESCE(resend_from_address,'')
+				FROM instance_settings WHERE id = 0
+			`).Scan(&instSMTPOn, &instHost, &instPort, &instUser, &instPass, &instFrom, &instResendOn, &instResKey, &instResFrom); err == nil {
+				if instSMTPOn && strings.TrimSpace(instHost) != "" {
+					eff.SMTPHost = strings.TrimSpace(instHost)
+					eff.SMTPPort = instPort
+					eff.SMTPUsername = strings.TrimSpace(instUser)
+					eff.SMTPPassword = s.decryptString(instPass)
+					if eff.SMTPFrom == "" {
+						eff.SMTPFrom = strings.TrimSpace(instFrom)
+					}
+				}
+				if instResendOn && strings.TrimSpace(instResKey) != "" {
+					eff.ResendEnabled = true
+					eff.ResendAPIKey = s.decryptString(instResKey)
+					if eff.ResendFromAddress == "" {
+						eff.ResendFromAddress = strings.TrimSpace(instResFrom)
+					}
+				}
+			}
+		}
+
+		var recips []string
+		for _, r := range strings.Split(eff.SMTPRecipient, ",") {
+			if tr := strings.TrimSpace(r); tr != "" {
+				recips = append(recips, tr)
+			}
+		}
+		if len(recips) == 0 {
+			sendErr = errors.New("smtp_recipient is required")
+			break
+		}
+
+		if eff.ResendEnabled && strings.TrimSpace(eff.ResendAPIKey) != "" {
+			from := strings.TrimSpace(eff.ResendFromAddress)
+			if from == "" {
+				from = strings.TrimSpace(eff.SMTPFrom)
+			}
+			if from == "" {
+				from = "coolify@localhost"
+			}
+			resendURL := "https://api.resend.com/emails"
+			if strings.HasPrefix(eff.SMTPHost, "http://") || strings.HasPrefix(eff.SMTPHost, "https://") {
+				resendURL = strings.TrimRight(eff.SMTPHost, "/") + "/emails"
+			}
+			bodyBytes, _ := json.Marshal(map[string]any{
+				"from":    from,
+				"to":      recips,
+				"subject": fmt.Sprintf("[Coolify] %s", event),
+				"text":    summary,
+			})
+			req, rErr := http.NewRequestWithContext(ctx, http.MethodPost, resendURL, bytes.NewReader(bodyBytes))
+			if rErr != nil {
+				sendErr = rErr
+				break
+			}
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(eff.ResendAPIKey))
+			req.Header.Set("Content-Type", "application/json")
+			resp, doErr := s.http.Do(req)
+			if doErr != nil {
+				sendErr = doErr
+				break
+			}
+			httpStatus = resp.StatusCode
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			if httpStatus < 200 || httpStatus >= 300 {
+				sendErr = fmt.Errorf("resend API returned HTTP %d", httpStatus)
+			}
+			break
+		}
+
+		if eff.SMTPHost == "" {
 			sendErr = errors.New("smtp_host and smtp_recipient are required")
 			break
 		}
-		port := cfg.SMTPPort
+		port := eff.SMTPPort
 		if port <= 0 {
 			port = 25
 		}
-		addr := fmt.Sprintf("%s:%d", cfg.SMTPHost, port)
-		from := cfg.SMTPFrom
+		addr := fmt.Sprintf("%s:%d", eff.SMTPHost, port)
+		from := eff.SMTPFrom
 		if from == "" {
 			from = "coolify@localhost"
 		}
-		msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: [Coolify] %s\r\n\r\n%s\r\n", from, cfg.SMTPRecipient, event, summary)
+		msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: [Coolify] %s\r\n\r\n%s\r\n", from, strings.Join(recips, ", "), event, summary)
 		var authObj smtp.Auth
-		if cfg.SMTPUsername != "" {
-			authObj = smtp.PlainAuth("", cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPHost)
+		if eff.SMTPUsername != "" {
+			authObj = smtp.PlainAuth("", eff.SMTPUsername, eff.SMTPPassword, eff.SMTPHost)
 		}
-		sendErr = smtp.SendMail(addr, authObj, from, []string{cfg.SMTPRecipient}, []byte(msg))
+		sendErr = smtp.SendMail(addr, authObj, from, recips, []byte(msg))
 
 	default:
 		sendErr = fmt.Errorf("unsupported notification channel %q", ch)
@@ -283,4 +363,14 @@ func (s *PostgresNotificationService) SendReal(ctx context.Context, teamID int64
 		&rec.Status, &rec.HTTPStatus, &rec.ErrorText, &rec.DeliveredAt,
 	)
 	return rec, sendErr
+}
+
+func (s *PostgresNotificationService) decryptString(raw string) string {
+	if raw == "" || s.cipher == nil {
+		return raw
+	}
+	if plain, err := s.cipher.DecryptLaravelPayload(raw, false); err == nil {
+		return string(plain)
+	}
+	return raw
 }

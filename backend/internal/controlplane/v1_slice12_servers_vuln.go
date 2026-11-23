@@ -10,6 +10,7 @@ import (
 
 	"github.com/coollabsio/coolify/backend/internal/access"
 	"github.com/coollabsio/coolify/backend/internal/auth"
+	"github.com/coollabsio/coolify/backend/internal/domains/ops"
 	"github.com/coollabsio/coolify/backend/internal/jobs"
 	"github.com/jackc/pgx/v5"
 )
@@ -102,6 +103,24 @@ func (a *App) withExtendedServerRoutes(next authedHandler) authedHandler {
 				return
 			}
 			a.handleServerSentinel(w, r, p, m)
+			return
+
+		case "advanced":
+			m, err := a.loadServerMeta(r, srvUUID)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"message": "server not found"})
+				return
+			}
+			a.handleServerAdvancedSettings(w, r, p, m)
+			return
+
+		case "metrics":
+			m, err := a.loadServerMeta(r, srvUUID)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"message": "server not found"})
+				return
+			}
+			a.handleServerMetrics(w, r, p, m)
 			return
 
 		case "image-scanning":
@@ -567,6 +586,152 @@ func (a *App) handleSentinelPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Metrics accepted."})
 }
 
+// ---- Server Advanced Settings & Live/Historical Metrics ----
+
+func (a *App) handleServerAdvancedSettings(w http.ResponseWriter, r *http.Request, p auth.Principal, m slice12ServerMeta) {
+	switch r.Method {
+	case http.MethodGet:
+		if err := a.Authz.Check(r.Context(), p, access.ActionRead, m.Ref); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+	case http.MethodPatch:
+		if err := a.Authz.Check(r.Context(), p, access.ActionUpdate, m.Ref); err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		var body struct {
+			ServerTimezone       *string `json:"server_timezone"`
+			WildcardDomain       *string `json:"wildcard_domain"`
+			ConcurrentBuilds     *int    `json:"concurrent_builds"`
+			DiskUsageThreshold   *int    `json:"server_disk_usage_notification_threshold"`
+			IsBuildServer        *bool   `json:"is_build_server"`
+			IsTerminalEnabled    *bool   `json:"is_terminal_enabled"`
+			GenerateExactLabels  *bool   `json:"generate_exact_labels"`
+			IsSwarmManager       *bool   `json:"is_swarm_manager"`
+			IsSwarmWorker        *bool   `json:"is_swarm_worker"`
+			ForceDisabled        *bool   `json:"force_disabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid server advanced settings payload"})
+			return
+		}
+		if body.ServerTimezone != nil && strings.TrimSpace(*body.ServerTimezone) != "" {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET server_timezone = $1, updated_at = NOW() WHERE server_id = $2`, strings.TrimSpace(*body.ServerTimezone), m.ID)
+		}
+		if body.WildcardDomain != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET wildcard_domain = $1, updated_at = NOW() WHERE server_id = $2`, strings.TrimSpace(*body.WildcardDomain), m.ID)
+		}
+		if body.ConcurrentBuilds != nil && *body.ConcurrentBuilds >= 1 {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET concurrent_builds = $1, updated_at = NOW() WHERE server_id = $2`, *body.ConcurrentBuilds, m.ID)
+		}
+		if body.DiskUsageThreshold != nil && *body.DiskUsageThreshold >= 1 && *body.DiskUsageThreshold <= 100 {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET server_disk_usage_notification_threshold = $1, updated_at = NOW() WHERE server_id = $2`, *body.DiskUsageThreshold, m.ID)
+		}
+		if body.IsBuildServer != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET is_build_server = $1, updated_at = NOW() WHERE server_id = $2`, *body.IsBuildServer, m.ID)
+		}
+		if body.IsTerminalEnabled != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET is_terminal_enabled = $1, updated_at = NOW() WHERE server_id = $2`, *body.IsTerminalEnabled, m.ID)
+		}
+		if body.GenerateExactLabels != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET generate_exact_labels = $1, updated_at = NOW() WHERE server_id = $2`, *body.GenerateExactLabels, m.ID)
+		}
+		if body.IsSwarmManager != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET is_swarm_manager = $1, updated_at = NOW() WHERE server_id = $2`, *body.IsSwarmManager, m.ID)
+		}
+		if body.IsSwarmWorker != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET is_swarm_worker = $1, updated_at = NOW() WHERE server_id = $2`, *body.IsSwarmWorker, m.ID)
+		}
+		if body.ForceDisabled != nil && m.ID != 0 {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE server_settings SET force_disabled = $1, updated_at = NOW() WHERE server_id = $2`, *body.ForceDisabled, m.ID)
+		}
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+
+	var tz, wildcard string
+	var conc, diskThresh int
+	var buildSrv, termEn, exactLbl, swarmMgr, swarmWrk, forceDis bool
+	_ = a.Pool.QueryRow(r.Context(), `
+		SELECT COALESCE(server_timezone, 'UTC'), COALESCE(wildcard_domain, ''),
+		       COALESCE(concurrent_builds, 2), COALESCE(server_disk_usage_notification_threshold, 80),
+		       COALESCE(is_build_server, FALSE), COALESCE(is_terminal_enabled, TRUE),
+		       COALESCE(generate_exact_labels, FALSE), COALESCE(is_swarm_manager, FALSE),
+		       COALESCE(is_swarm_worker, FALSE), COALESCE(force_disabled, FALSE)
+		FROM server_settings WHERE server_id = $1
+	`, m.ID).Scan(&tz, &wildcard, &conc, &diskThresh, &buildSrv, &termEn, &exactLbl, &swarmMgr, &swarmWrk, &forceDis)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"server_timezone":                          tz,
+		"wildcard_domain":                          wildcard,
+		"concurrent_builds":                        conc,
+		"server_disk_usage_notification_threshold": diskThresh,
+		"is_build_server":                          buildSrv,
+		"is_terminal_enabled":                      termEn,
+		"generate_exact_labels":                    exactLbl,
+		"is_swarm_manager":                         swarmMgr,
+		"is_swarm_worker":                          swarmWrk,
+		"force_disabled":                           forceDis,
+	})
+}
+
+func (a *App) handleServerMetrics(w http.ResponseWriter, r *http.Request, p auth.Principal, m slice12ServerMeta) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+		return
+	}
+	if err := a.Authz.Check(r.Context(), p, access.ActionRead, m.Ref); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	if m.ID == 0 {
+		var latestAt time.Time
+		needSample := a.Pool.QueryRow(r.Context(), `SELECT recorded_at FROM go_server_metrics WHERE server_id = 0 ORDER BY id DESC LIMIT 1`).Scan(&latestAt) != nil || time.Since(latestAt) > 30*time.Second
+		if needSample {
+			localMetricsCollectMu.Lock()
+			if sample, err := ops.CollectLocalHostMetrics(r.Context()); err == nil {
+				_ = ops.RecordServerMetrics(r.Context(), a.Pool, 0, sample)
+			}
+			localMetricsCollectMu.Unlock()
+		}
+	}
+	rows, err := a.Pool.Query(r.Context(), `
+		SELECT cpu_percent, memory_percent, disk_percent, recorded_at
+		FROM go_server_metrics
+		WHERE server_id = $1
+		ORDER BY id DESC
+		LIMIT 60
+	`, m.ID)
+	history := make([]map[string]any, 0)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var cpu, mem, disk float64
+			var ts time.Time
+			if rows.Scan(&cpu, &mem, &disk, &ts) == nil {
+				history = append(history, map[string]any{
+					"cpu_percent":    cpu,
+					"memory_percent": mem,
+					"disk_percent":   disk,
+					"recorded_at":    ts.UTC().Format(time.RFC3339),
+				})
+			}
+		}
+	}
+	var latest any
+	if len(history) > 0 {
+		latest = history[0]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"server_uuid": m.UUID,
+		"has_metrics": len(history) > 0,
+		"latest":      latest,
+		"history":     history,
+	})
+}
+
 // ---- Image Scanning & Cloudflare Tunnel ----
 
 func (a *App) handleServerImageScanning(w http.ResponseWriter, r *http.Request, p auth.Principal, m slice12ServerMeta) {
@@ -835,7 +1000,7 @@ func (a *App) handleServerProxyExtended(w http.ResponseWriter, r *http.Request, 
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Proxy configuration saved."})
 		return
 	}
-	if len(rest) == 1 && rest[0] == "restart" && r.Method == http.MethodPost {
+	if len(rest) == 1 && (rest[0] == "restart" || rest[0] == "start" || rest[0] == "stop") && r.Method == http.MethodPost {
 		if err := a.Authz.Check(r.Context(), p, access.ActionDeploy, m.Ref); err != nil {
 			writeDomainError(w, err)
 			return
@@ -844,12 +1009,26 @@ func (a *App) handleServerProxyExtended(w http.ResponseWriter, r *http.Request, 
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "Server has been transferred away; remote commands are disabled."})
 			return
 		}
-		rec, err := a.enqueueResourceLifecycleJob(r.Context(), "server", m.UUID, m.UUID, m.TeamID, "server_validate")
+		action := rest[0]
+		jobType := "proxy_restart"
+		nextStatus := "starting"
+		msg := "Proxy restart queued."
+		if action == "start" {
+			jobType = "proxy_start"
+			msg = "Proxy start queued."
+		} else if action == "stop" {
+			jobType = "proxy_stop"
+			nextStatus = "stopping"
+			msg = "Proxy stop queued."
+		}
+		stJSON, _ := json.Marshal(map[string]any{"status": nextStatus})
+		_, _ = a.Pool.Exec(r.Context(), `UPDATE servers SET proxy = COALESCE(proxy,'{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2`, string(stJSON), m.ID)
+		rec, err := a.enqueueResourceLifecycleJob(r.Context(), "server", m.UUID, m.UUID, m.TeamID, jobType)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 			return
 		}
-		rec["message"] = "Proxy restart queued."
+		rec["message"] = msg
 		writeJSON(w, http.StatusAccepted, rec)
 		return
 	}

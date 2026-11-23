@@ -28,6 +28,7 @@ import SourcesAndCloudPanel from '../integrations/SourcesAndCloudPanel.vue';
 import SecurityAndVulnPanel from '../security/SecurityAndVulnPanel.vue';
 import GovernanceAndAuthPanel from '../settings/GovernanceAndAuthPanel.vue';
 import ServersPage from '../servers/ServersPage.vue';
+import ToastHost from '../../components/ToastHost.vue';
 import RegistriesPage from '../servers/RegistriesPage.vue';
 import ServerPage from '../servers/ServerPage.vue';
 import DestinationsPage from '../servers/DestinationsPage.vue';
@@ -497,5 +498,6 @@ onBeforeUnmount(() => {
                 <ProxyConfig :server-uuid="activeServerUuid" />
             </template>
         </template>
+        <ToastHost />
     </div>
 </template>

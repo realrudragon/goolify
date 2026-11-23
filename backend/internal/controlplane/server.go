@@ -682,16 +682,71 @@ func (a *App) handleServers(w http.ResponseWriter, r *http.Request, p auth.Princ
 			writeDomainError(w, err)
 			return
 		}
-		proxyType := r.URL.Query().Get("type")
+		var rawProxy []byte
+		_ = a.Pool.QueryRow(r.Context(), `SELECT COALESCE(proxy, '{}'::jsonb) FROM servers WHERE id = $1`, srv.ID).Scan(&rawProxy)
+		var proxyMeta map[string]any
+		_ = json.Unmarshal(rawProxy, &proxyMeta)
+
+		proxyType := strings.TrimSpace(r.URL.Query().Get("type"))
 		if proxyType == "" {
-			proxyType = "traefik"
+			if savedType, ok := proxyMeta["type"].(string); ok && strings.TrimSpace(savedType) != "" {
+				proxyType = savedType
+			} else {
+				proxyType = "traefik"
+			}
 		}
-		bundle, err := a.ProxyGen.Render(r.Context(), proxyType, []proxy.ProxyResource{
-			{UUID: srv.UUID, FQDN: "https://" + srv.Name + ".local", Upstream: "http://127.0.0.1:80"},
-		})
+		var networks []string
+		if nRows, nErr := a.Pool.Query(r.Context(), `SELECT DISTINCT COALESCE(NULLIF(network,''), 'coolify') FROM standalone_dockers WHERE server_id = $1`, srv.ID); nErr == nil {
+			for nRows.Next() {
+				var netName string
+				if nRows.Scan(&netName) == nil {
+					networks = append(networks, netName)
+				}
+			}
+			nRows.Close()
+		}
+		var proxyRes []proxy.ProxyResource
+		if aRows, aErr := a.Pool.Query(r.Context(), `
+			SELECT a.uuid, COALESCE(a.fqdn,''), COALESCE(NULLIF(a.ports_exposes,''), '80')
+			FROM applications a
+			JOIN standalone_dockers sd ON sd.id = a.destination_id
+			WHERE sd.server_id = $1 AND COALESCE(a.fqdn,'') <> ''
+		`, srv.ID); aErr == nil {
+			for aRows.Next() {
+				var u, fqdn, portStr string
+				if aRows.Scan(&u, &fqdn, &portStr) == nil {
+					p := strings.TrimSpace(strings.Split(portStr, ",")[0])
+					if p == "" {
+						p = "80"
+					}
+					for _, domain := range strings.Split(fqdn, ",") {
+						domain = strings.TrimSpace(domain)
+						if domain != "" {
+							proxyRes = append(proxyRes, proxy.ProxyResource{
+								UUID:     u,
+								FQDN:     domain,
+								Upstream: fmt.Sprintf("http://%s:%s", u, p),
+								TLS:      strings.HasPrefix(strings.ToLower(domain), "https://"),
+							})
+						}
+					}
+				}
+			}
+			aRows.Close()
+		}
+		bundle, err := a.ProxyGen.RenderWithNetworks(proxyType, networks, proxyRes)
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": err.Error()})
 			return
+		}
+		if customCfg, ok := proxyMeta["custom_configuration"].(string); ok && strings.TrimSpace(customCfg) != "" {
+			bundle.ComposeYAML = customCfg
+			bundle.MainYAML = customCfg
+		}
+		if st, ok := proxyMeta["status"].(string); ok && st != "" {
+			bundle.Status = st
+		} else {
+			bundle.Status = "running"
 		}
 		writeJSON(w, http.StatusOK, bundle)
 		return
@@ -2148,6 +2203,16 @@ func (a *App) handleDatabases(w http.ResponseWriter, r *http.Request, p auth.Pri
 		}
 	}
 
+	if len(parts) == 2 && parts[1] == "rotate-password" && r.Method == http.MethodPost {
+		db, err := a.DatabaseSvc.UpdateConfig(r.Context(), p, dbUUID, databases.DatabaseUpdateInput{RotatePassword: true})
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, db)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		db, err := a.DatabaseSvc.GetByUUID(r.Context(), p, dbUUID)
@@ -2157,19 +2222,12 @@ func (a *App) handleDatabases(w http.ResponseWriter, r *http.Request, p auth.Pri
 		}
 		writeJSON(w, http.StatusOK, db)
 	case http.MethodPatch, http.MethodPut:
-		var body struct {
-			CustomPort int `json:"custom_port"`
-			PublicPort int `json:"public_port"`
-		}
+		var body databases.DatabaseUpdateInput
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid database update"})
 			return
 		}
-		port := body.CustomPort
-		if port == 0 {
-			port = body.PublicPort
-		}
-		db, err := a.DatabaseSvc.UpdatePort(r.Context(), p, dbUUID, port)
+		db, err := a.DatabaseSvc.UpdateConfig(r.Context(), p, dbUUID, body)
 		if err != nil {
 			writeDomainError(w, err)
 			return
@@ -2474,12 +2532,26 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request, p auth.Prin
 	}
 	switch r.Method {
 	case http.MethodGet:
-		var name string
-		var apiOn, mcpOn, regOn bool
+		var name, fqdn, tz, allowedIPs, autoUpdFreq, updCheckFreq string
+		var smtpHost, smtpUser, smtpFrom, smtpFromName, resendFrom, resendFromName string
+		var smtpPort int
+		var apiOn, mcpOn, regOn, autoUpdOn, smtpOn, resendOn bool
 		err := a.Pool.QueryRow(r.Context(), `
-			SELECT instance_name, is_api_enabled, is_mcp_server_enabled, is_registration_enabled
+			SELECT instance_name, COALESCE(fqdn,''), COALESCE(instance_timezone,'UTC'), COALESCE(allowed_ips,''),
+			       is_api_enabled, is_mcp_server_enabled, is_registration_enabled,
+			       COALESCE(is_auto_update_enabled,FALSE), COALESCE(auto_update_frequency,'0 0 * * *'), COALESCE(update_check_frequency,'0 * * * *'),
+			       COALESCE(smtp_enabled,FALSE), COALESCE(smtp_host,''), COALESCE(smtp_port,587),
+			       COALESCE(smtp_username,''), COALESCE(smtp_from_address,''), COALESCE(smtp_from_name,''),
+			       COALESCE(resend_enabled,FALSE), COALESCE(resend_from_address,''), COALESCE(resend_from_name,'')
 			FROM instance_settings WHERE id = 0
-		`).Scan(&name, &apiOn, &mcpOn, &regOn)
+		`).Scan(
+			&name, &fqdn, &tz, &allowedIPs,
+			&apiOn, &mcpOn, &regOn,
+			&autoUpdOn, &autoUpdFreq, &updCheckFreq,
+			&smtpOn, &smtpHost, &smtpPort,
+			&smtpUser, &smtpFrom, &smtpFromName,
+			&resendOn, &resendFrom, &resendFromName,
+		)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
 			return
@@ -2487,16 +2559,48 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request, p auth.Prin
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":                      0,
 			"instance_name":           name,
+			"fqdn":                    fqdn,
+			"instance_timezone":       tz,
+			"allowed_ips":             allowedIPs,
 			"is_api_enabled":          apiOn,
 			"is_mcp_server_enabled":   mcpOn,
 			"is_registration_enabled": regOn,
+			"is_auto_update_enabled":  autoUpdOn,
+			"auto_update_frequency":   autoUpdFreq,
+			"update_check_frequency":  updCheckFreq,
+			"smtp_enabled":            smtpOn,
+			"smtp_host":               smtpHost,
+			"smtp_port":               smtpPort,
+			"smtp_username":           smtpUser,
+			"smtp_from_address":       smtpFrom,
+			"smtp_from_name":          smtpFromName,
+			"resend_enabled":          resendOn,
+			"resend_from_address":     resendFrom,
+			"resend_from_name":        resendFromName,
 		})
 	case http.MethodPatch:
 		var body struct {
-			InstanceName *string `json:"instance_name"`
-			IsAPIEnabled *bool   `json:"is_api_enabled"`
-			IsMCPEnabled *bool   `json:"is_mcp_server_enabled"`
-			IsRegEnabled *bool   `json:"is_registration_enabled"`
+			InstanceName        *string `json:"instance_name"`
+			FQDN                *string `json:"fqdn"`
+			InstanceTimezone    *string `json:"instance_timezone"`
+			AllowedIPs          *string `json:"allowed_ips"`
+			IsAPIEnabled        *bool   `json:"is_api_enabled"`
+			IsMCPEnabled        *bool   `json:"is_mcp_server_enabled"`
+			IsRegEnabled        *bool   `json:"is_registration_enabled"`
+			IsAutoUpdateEnabled *bool   `json:"is_auto_update_enabled"`
+			AutoUpdateFrequency *string `json:"auto_update_frequency"`
+			UpdateCheckFreq     *string `json:"update_check_frequency"`
+			SMTPEnabled         *bool   `json:"smtp_enabled"`
+			SMTPHost            *string `json:"smtp_host"`
+			SMTPPort            *int    `json:"smtp_port"`
+			SMTPUsername        *string `json:"smtp_username"`
+			SMTPPassword        *string `json:"smtp_password"`
+			SMTPFromAddress     *string `json:"smtp_from_address"`
+			SMTPFromName        *string `json:"smtp_from_name"`
+			ResendEnabled       *bool   `json:"resend_enabled"`
+			ResendAPIKey        *string `json:"resend_api_key"`
+			ResendFromAddress   *string `json:"resend_from_address"`
+			ResendFromName      *string `json:"resend_from_name"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "invalid settings payload"})
@@ -2504,6 +2608,15 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request, p auth.Prin
 		}
 		if body.InstanceName != nil {
 			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET instance_name = $1, updated_at = NOW() WHERE id = 0`, *body.InstanceName)
+		}
+		if body.FQDN != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET fqdn = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.FQDN))
+		}
+		if body.InstanceTimezone != nil && strings.TrimSpace(*body.InstanceTimezone) != "" {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET instance_timezone = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.InstanceTimezone))
+		}
+		if body.AllowedIPs != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET allowed_ips = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.AllowedIPs))
 		}
 		if body.IsAPIEnabled != nil {
 			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET is_api_enabled = $1, updated_at = NOW() WHERE id = 0`, *body.IsAPIEnabled)
@@ -2513,6 +2626,50 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request, p auth.Prin
 		}
 		if body.IsRegEnabled != nil {
 			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET is_registration_enabled = $1, updated_at = NOW() WHERE id = 0`, *body.IsRegEnabled)
+		}
+		if body.IsAutoUpdateEnabled != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET is_auto_update_enabled = $1, updated_at = NOW() WHERE id = 0`, *body.IsAutoUpdateEnabled)
+		}
+		if body.AutoUpdateFrequency != nil && strings.TrimSpace(*body.AutoUpdateFrequency) != "" {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET auto_update_frequency = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.AutoUpdateFrequency))
+		}
+		if body.UpdateCheckFreq != nil && strings.TrimSpace(*body.UpdateCheckFreq) != "" {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET update_check_frequency = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.UpdateCheckFreq))
+		}
+		if body.SMTPEnabled != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_enabled = $1, updated_at = NOW() WHERE id = 0`, *body.SMTPEnabled)
+		}
+		if body.SMTPHost != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_host = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.SMTPHost))
+		}
+		if body.SMTPPort != nil && *body.SMTPPort > 0 {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_port = $1, updated_at = NOW() WHERE id = 0`, *body.SMTPPort)
+		}
+		if body.SMTPUsername != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_username = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.SMTPUsername))
+		}
+		if body.SMTPPassword != nil && strings.TrimSpace(*body.SMTPPassword) != "" {
+			enc, _ := a.encryptSecretString(*body.SMTPPassword)
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_password = $1, updated_at = NOW() WHERE id = 0`, enc)
+		}
+		if body.SMTPFromAddress != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_from_address = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.SMTPFromAddress))
+		}
+		if body.SMTPFromName != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET smtp_from_name = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.SMTPFromName))
+		}
+		if body.ResendEnabled != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET resend_enabled = $1, updated_at = NOW() WHERE id = 0`, *body.ResendEnabled)
+		}
+		if body.ResendAPIKey != nil && strings.TrimSpace(*body.ResendAPIKey) != "" {
+			enc, _ := a.encryptSecretString(*body.ResendAPIKey)
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET resend_api_key = $1, updated_at = NOW() WHERE id = 0`, enc)
+		}
+		if body.ResendFromAddress != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET resend_from_address = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.ResendFromAddress))
+		}
+		if body.ResendFromName != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE instance_settings SET resend_from_name = $1, updated_at = NOW() WHERE id = 0`, strings.TrimSpace(*body.ResendFromName))
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Instance settings updated."})
 	default:

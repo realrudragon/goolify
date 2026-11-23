@@ -42,6 +42,9 @@ const selectedServerUuid = ref('localhost');
 const appName = ref('');
 const appRepo = ref('https://github.com/coollabsio/coolify-examples');
 const appBranch = ref('main');
+const appImage = ref('');
+const appTag = ref('latest');
+const appDockerfile = ref('');
 const appType = ref<
   'public' | 'dockerfile' | 'dockerimage' | 'dockercompose' | 'static' | 'private-github-app' | 'private-deploy-key'
 >('public');
@@ -50,16 +53,19 @@ const svcName = ref('');
 const selectedTemplate = ref('');
 const svcCompose = ref('services:\n  web:\n    image: nginx:alpine\n');
 const status = ref('');
+let envLoadGen = 0;
 
 async function loadAll() {
+  const token = lifecycle.beginLoad();
   try {
     const [appList, svcList, projList, srvList, tplList] = await Promise.all([
-      apiRequest<ResourceSummary[]>('/api/v1/applications', { signal: lifecycle.signal }).catch(() => []),
-      apiRequest<ResourceSummary[]>('/api/v1/services', { signal: lifecycle.signal }).catch(() => []),
-      apiRequest<ProjectOption[]>('/api/v1/projects', { signal: lifecycle.signal }).catch(() => []),
-      apiRequest<Array<{ uuid: string; name: string }>>('/api/v1/servers', { signal: lifecycle.signal }).catch(() => []),
-      apiRequest<ServiceTemplateOption[]>('/api/v1/services/templates', { signal: lifecycle.signal }).catch(() => []),
+      apiRequest<ResourceSummary[]>('/api/v1/applications', { signal: token.signal }).catch(() => []),
+      apiRequest<ResourceSummary[]>('/api/v1/services', { signal: token.signal }).catch(() => []),
+      apiRequest<ProjectOption[]>('/api/v1/projects', { signal: token.signal }).catch(() => []),
+      apiRequest<Array<{ uuid: string; name: string }>>('/api/v1/servers', { signal: token.signal }).catch(() => []),
+      apiRequest<ServiceTemplateOption[]>('/api/v1/services/templates', { signal: token.signal }).catch(() => []),
     ]);
+    if (!token.isCurrent()) return;
     apps.value = appList;
     services.value = svcList;
     projects.value = projList;
@@ -71,28 +77,34 @@ async function loadAll() {
       selectedProjectUuid.value = projList[0].uuid;
       await loadEnvs(projList[0].uuid);
     }
+    if (!token.isCurrent()) return;
     if (srvList.length > 0 && !srvList.some((s) => s.uuid === selectedServerUuid.value)) {
       selectedServerUuid.value = srvList[0].uuid;
     }
   } catch {
+    if (!token.isCurrent()) return;
     apps.value = [];
     services.value = [];
   }
 }
 
 async function loadEnvs(projUuid: string) {
+  const currentGen = ++envLoadGen;
   if (!projUuid) {
     envs.value = [];
     selectedEnvUuid.value = '';
     return;
   }
   try {
-    envs.value = await apiRequest<Array<{ uuid: string; name: string }>>(
+    const loaded = await apiRequest<Array<{ uuid: string; name: string }>>(
       `/api/v1/projects/${encodeURIComponent(projUuid)}/environments`,
       { signal: lifecycle.signal },
     );
+    if (currentGen !== envLoadGen) return;
+    envs.value = loaded;
     if (!envs.value.some(env => env.uuid === selectedEnvUuid.value)) selectedEnvUuid.value = envs.value[0]?.uuid ?? '';
   } catch {
+    if (currentGen !== envLoadGen) return;
     envs.value = [];
     selectedEnvUuid.value = '';
   }
@@ -105,22 +117,31 @@ async function createApp() {
   }
   status.value = '';
   try {
+    const payload: Record<string, string> = {
+      name: appName.value.trim(),
+      project_uuid: selectedProjectUuid.value,
+      environment_uuid: selectedEnvUuid.value,
+      server_uuid: selectedServerUuid.value,
+    };
+    if (appType.value === 'dockerimage') {
+      payload.docker_registry_image_name = appImage.value.trim();
+      if (appTag.value.trim()) payload.docker_registry_image_tag = appTag.value.trim();
+    } else if (appType.value === 'dockerfile') {
+      if (appDockerfile.value.trim()) payload.dockerfile = appDockerfile.value;
+      if (appRepo.value.trim()) {
+        payload.git_repository = appRepo.value.trim();
+        payload.git_branch = appBranch.value.trim() || 'main';
+      }
+    } else {
+      payload.git_repository = appRepo.value.trim();
+      payload.git_branch = appBranch.value.trim() || 'main';
+    }
     const created = await apiRequest<ResourceSummary>(
       `/api/v1/applications/${appType.value}`,
       {
         method: 'POST',
         signal: lifecycle.signal,
-        body: JSON.stringify({
-          name: appName.value.trim(),
-          project_uuid: selectedProjectUuid.value,
-          environment_uuid: selectedEnvUuid.value,
-          server_uuid: selectedServerUuid.value,
-          git_repository: appRepo.value.trim(),
-          git_branch: appBranch.value.trim() || 'main',
-          dockerfile: 'FROM alpine:3.20\nCMD ["sleep", "infinity"]\n',
-          docker_registry_image_name: 'nginx',
-          docker_registry_image_tag: 'alpine',
-        }),
+        body: JSON.stringify(payload),
       },
     );
     appName.value = '';
@@ -279,8 +300,19 @@ defineExpose({ refresh: loadAll });
           <option value="private-github-app">GitHub App</option>
           <option value="private-deploy-key">Private SSH Deploy Key</option>
         </select>
-        <input v-model="appRepo" class="coolify-input" placeholder="Git repository URL" />
-        <input v-model="appBranch" class="coolify-input" style="width:90px;" placeholder="Branch" />
+        <template v-if="appType === 'dockerimage'">
+          <input v-model="appImage" class="coolify-input" placeholder="Docker image (e.g. nginx)" required />
+          <input v-model="appTag" class="coolify-input" style="width:100px;" placeholder="Tag" />
+        </template>
+        <template v-else-if="appType === 'dockerfile'">
+          <input v-model="appDockerfile" class="coolify-input" placeholder="Inline Dockerfile content (optional if Git repo set)" />
+          <input v-model="appRepo" class="coolify-input" placeholder="Git repository URL (optional)" />
+          <input v-model="appBranch" class="coolify-input" style="width:90px;" placeholder="Branch" />
+        </template>
+        <template v-else>
+          <input v-model="appRepo" class="coolify-input" placeholder="Git repository URL" />
+          <input v-model="appBranch" class="coolify-input" style="width:90px;" placeholder="Branch" />
+        </template>
         <button type="submit" class="coolify-btn coolify-btn-primary" data-testid="create-app-btn">Create Application</button>
       </form>
 

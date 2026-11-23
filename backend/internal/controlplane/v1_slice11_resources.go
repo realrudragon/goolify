@@ -18,6 +18,7 @@ import (
 	"github.com/coollabsio/coolify/backend/internal/access"
 	"github.com/coollabsio/coolify/backend/internal/auth"
 	"github.com/coollabsio/coolify/backend/internal/compat"
+	"github.com/coollabsio/coolify/backend/internal/domains/backups"
 	"github.com/coollabsio/coolify/backend/internal/jobs"
 	"github.com/coollabsio/coolify/backend/internal/realtime"
 	"github.com/jackc/pgx/v5"
@@ -475,12 +476,13 @@ func (a *App) withExtendedS3Routes(next authedHandler) authedHandler {
 
 func (a *App) handleS3UpdateOrValidate(w http.ResponseWriter, r *http.Request, p auth.Principal, s3UUID string, isValidate bool) {
 	var id, teamID int64
-	var name, desc, region, bucket, endpoint string
-	var usable bool
+	var name, desc, region, bucket, endpoint, encKey, encSecret string
+	var usable, skipTLS bool
 	err := a.Pool.QueryRow(r.Context(), `
-		SELECT id, team_id, name, COALESCE(description,''), region, bucket, endpoint, is_usable
+		SELECT id, team_id, name, COALESCE(description,''), COALESCE(region,''), COALESCE(bucket,''),
+		       COALESCE(endpoint,''), COALESCE(key,''), COALESCE(secret,''), is_usable, COALESCE(skip_tls_verification, FALSE)
 		FROM s3_storages WHERE uuid = $1
-	`, s3UUID).Scan(&id, &teamID, &name, &desc, &region, &bucket, &endpoint, &usable)
+	`, s3UUID).Scan(&id, &teamID, &name, &desc, &region, &bucket, &endpoint, &encKey, &encSecret, &usable, &skipTLS)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "s3 storage not found"})
 		return
@@ -496,7 +498,21 @@ func (a *App) handleS3UpdateOrValidate(w http.ResponseWriter, r *http.Request, p
 	}
 	if isValidate {
 		if strings.TrimSpace(bucket) == "" && strings.TrimSpace(endpoint) == "" {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"message": "storage endpoint/bucket missing"})
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE s3_storages SET is_usable = FALSE, updated_at = NOW() WHERE id = $1`, id)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "storage endpoint/bucket missing", "uuid": s3UUID, "is_usable": false})
+			return
+		}
+		s3Client := &backups.S3HTTPClient{}
+		checkErr := s3Client.HeadBucket(r.Context(), backups.S3Target{
+			Endpoint:  strings.TrimSpace(endpoint),
+			Bucket:    strings.TrimSpace(bucket),
+			Region:    strings.TrimSpace(region),
+			AccessKey: a.decryptSecretString(encKey),
+			SecretKey: a.decryptSecretString(encSecret),
+		}, skipTLS)
+		if checkErr != nil {
+			_, _ = a.Pool.Exec(r.Context(), `UPDATE s3_storages SET is_usable = FALSE, updated_at = NOW() WHERE id = $1`, id)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": checkErr.Error(), "uuid": s3UUID, "is_usable": false})
 			return
 		}
 		_, _ = a.Pool.Exec(r.Context(), `UPDATE s3_storages SET is_usable = TRUE, updated_at = NOW() WHERE id = $1`, id)

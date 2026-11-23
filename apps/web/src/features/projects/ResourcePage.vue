@@ -3,12 +3,15 @@ import { computed, onMounted, ref } from 'vue';
 import PageHeading from '../../components/PageHeading.vue';
 import SettingsSection from '../../components/SettingsSection.vue';
 import AppIcon from '../../components/AppIcon.vue';
+import MetricsChart from '../../components/MetricsChart.vue';
+import SecretInput from '../../components/SecretInput.vue';
 import DeploymentHistory from '../deployments/DeploymentHistory.vue';
 import ScheduleList from '../schedules/ScheduleList.vue';
 import BackupManager from '../backups/BackupManager.vue';
 import LogViewer from '../logs/LogViewer.vue';
 import WebTerminal from '../terminal/WebTerminal.vue';
 import { apiRequest } from '../../lib/api';
+import { pushToast } from '../../lib/toast';
 import { usePageLifecycle } from '../../lib/use-page-lifecycle';
 
 const props = defineProps<{
@@ -49,7 +52,14 @@ const storageForm = ref({
 });
 const keys = ref<{ uuid: string; name?: string }[]>([]);
 const deployments = ref<Record<string, any>[]>([]);
-const serverMetrics = ref<{ cpu_percent: number; memory_percent: number; disk_percent: number; has_metrics?: boolean; recorded_at?: string } | null>(null);
+const attachedDestinations = ref<Record<string, any>[]>([]);
+const allDestinations = ref<Record<string, any>[]>([]);
+const selectedDestinationUuid = ref('');
+const serverMetrics = ref<{
+    has_metrics: boolean;
+    latest?: { cpu_percent: number; memory_percent: number; disk_percent: number; recorded_at: string };
+    history: { cpu_percent: number; memory_percent: number; disk_percent: number; recorded_at: string }[];
+}>({ has_metrics: false, history: [] });
 const advancedSettings = ref<Record<string, boolean>>({});
 const advancedFlags: [string, string][] = [
     ['is_auto_deploy_enabled', 'Auto Deploy'],
@@ -172,7 +182,14 @@ async function load() {
                         description: item.description ?? '',
                         docker_compose_raw: item.docker_compose_raw ?? '',
                     }
-                  : { custom_port: item.custom_port ?? 0 };
+                  : {
+                        name: item.name,
+                        description: item.description ?? '',
+                        image: item.image ?? '',
+                        is_public: Boolean(item.is_public),
+                        public_port: item.public_port ?? item.custom_port ?? 0,
+                        custom_port: item.custom_port ?? item.public_port ?? 0,
+                    };
         initial.value = JSON.stringify({ form: form.value, advanced: advancedSettings.value });
         if (section.value === 'environment-variables')
             rows.value = await apiRequest(`${endpoint.value}/envs`, { signal: lifecycle.signal });
@@ -186,9 +203,21 @@ async function load() {
             deployments.value = await apiRequest(`${endpoint.value}/deployments`, {
                 signal: lifecycle.signal,
             });
+        if (section.value === 'servers' && props.kind === 'application') {
+            const [attached, available] = await Promise.all([
+                apiRequest<Record<string, any>[]>(`${endpoint.value}/destinations`, {
+                    signal: lifecycle.signal,
+                }),
+                apiRequest<Record<string, any>[]>('/api/v1/destinations', {
+                    signal: lifecycle.signal,
+                }),
+            ]);
+            attachedDestinations.value = attached;
+            allDestinations.value = available;
+        }
         if (section.value === 'metrics' && item.server_uuid) {
             serverMetrics.value = await apiRequest(
-                `/canvas/api/servers/${encodeURIComponent(item.server_uuid)}/canvas/usage`,
+                `/api/v1/servers/${encodeURIComponent(item.server_uuid)}/metrics`,
                 { signal: lifecycle.signal },
             );
         }
@@ -231,8 +260,46 @@ async function save() {
         composeDialog.value?.close();
         await load();
         status.value = 'Saved.';
+        pushToast('Settings saved.', 'success');
     } catch (err) {
         error.value = (err as Error).message;
+        pushToast(error.value, 'error');
+    } finally {
+        busy.value = false;
+    }
+}
+async function attachDestination() {
+    if (!canEdit.value || busy.value || !selectedDestinationUuid.value) return;
+    busy.value = true;
+    error.value = '';
+    try {
+        await apiRequest(`${endpoint.value}/destinations`, {
+            method: 'POST',
+            body: JSON.stringify({ destination_uuid: selectedDestinationUuid.value }),
+        });
+        selectedDestinationUuid.value = '';
+        await load();
+        pushToast('Secondary destination attached.', 'success');
+    } catch (err) {
+        error.value = (err as Error).message;
+        pushToast(error.value, 'error');
+    } finally {
+        busy.value = false;
+    }
+}
+async function detachDestination(destUuid: string) {
+    if (!canEdit.value || busy.value) return;
+    busy.value = true;
+    error.value = '';
+    try {
+        await apiRequest(`${endpoint.value}/destinations/${encodeURIComponent(destUuid)}`, {
+            method: 'DELETE',
+        });
+        await load();
+        pushToast('Secondary destination detached.', 'success');
+    } catch (err) {
+        error.value = (err as Error).message;
+        pushToast(error.value, 'error');
     } finally {
         busy.value = false;
     }
@@ -271,6 +338,20 @@ async function removeStorage(storageUuid: string) {
         await load();
     } catch (err) {
         error.value = (err as Error).message;
+    }
+}
+async function rotateDatabasePassword() {
+    if (!canEdit.value || busy.value || props.kind !== 'database') return;
+    busy.value = true;
+    error.value = '';
+    try {
+        await apiRequest(`${endpoint.value}/rotate-password`, { method: 'POST', body: '{}' });
+        await load();
+        status.value = 'Database password rotated.';
+    } catch (err) {
+        error.value = (err as Error).message;
+    } finally {
+        busy.value = false;
     }
 }
 async function rollbackTo(deploymentUuid: string) {
@@ -513,32 +594,15 @@ onMounted(load);
                                 <div class="form-grid">
                                     <label class="form-field"
                                         >Name<input
-                                            v-if="kind !== 'database'"
                                             v-model="form.name"
                                             class="coolify-input"
                                             required
-                                            :readonly="!canEdit" /><input
-                                            v-else
-                                            :value="resource.name"
-                                            class="coolify-input"
-                                            readonly /></label
+                                            :readonly="!canEdit || (kind === 'database' && resource.id === 0)" /></label
                                     ><label class="form-field"
                                         >Description<input
-                                            v-if="kind !== 'database'"
                                             v-model="form.description"
                                             class="coolify-input"
-                                            :readonly="!canEdit" /><input
-                                            v-else
-                                            :value="resource.description"
-                                            class="coolify-input"
-                                            readonly /></label
-                                    ><label
-                                        v-if="kind === 'database'"
-                                        class="form-field full-span"
-                                        >Image<input
-                                            :value="resource.image"
-                                            class="coolify-input"
-                                            readonly
+                                            :readonly="!canEdit || (kind === 'database' && resource.id === 0)"
                                     /></label></div></SettingsSection
                             ><SettingsSection
                                 v-if="kind === 'application'"
@@ -630,17 +694,58 @@ onMounted(load);
                                     /></label></div></SettingsSection
                             ><SettingsSection
                                 v-if="kind === 'database'"
-                                title="Network"
-                                ><div class="form-grid">
-                                    <label class="form-field"
+                                title="Network &amp; Credentials"
+                                ><template #actions
+                                    ><button
+                                        v-if="canEdit && resource.id !== 0"
+                                        type="button"
+                                        class="coolify-btn"
+                                        :disabled="busy"
+                                        @click="rotateDatabasePassword"
+                                    >
+                                        Rotate Password
+                                    </button></template
+                                >
+                                <div class="form-grid">
+                                    <label class="form-field full-span"
+                                        >Docker Image<input
+                                            v-model="form.image"
+                                            class="coolify-input"
+                                            :readonly="!canEdit || resource.id === 0" /></label
+                                    ><label class="check-field full-span"
+                                        ><input
+                                            v-model="form.is_public"
+                                            type="checkbox"
+                                            :disabled="!canEdit || resource.id === 0"
+                                        />Make it publicly available</label
+                                    ><label class="form-field"
                                         >Public port<input
-                                            v-model.number="form.custom_port"
+                                            v-model.number="form.public_port"
                                             type="number"
                                             min="0"
                                             max="65535"
                                             class="coolify-input"
-                                            :readonly="!canEdit"
-                                    /></label></div
+                                            :readonly="!canEdit || resource.id === 0" /></label
+                                    ><div
+                                        v-if="resource.internal_db_url"
+                                        class="form-field full-span"
+                                    >
+                                        <span>Internal DB URL</span>
+                                        <SecretInput
+                                            :value="resource.internal_db_url"
+                                            label="Internal DB URL"
+                                        />
+                                    </div>
+                                    <div
+                                        v-if="resource.external_db_url"
+                                        class="form-field full-span"
+                                    >
+                                        <span>External DB URL</span>
+                                        <SecretInput
+                                            :value="resource.external_db_url"
+                                            label="External DB URL"
+                                        />
+                                    </div></div
                             ></SettingsSection>
                         </div>
                     </form>
@@ -703,12 +808,9 @@ onMounted(load);
                                 >
                                     <td class="code-text">{{ row.key }}</td>
                                     <td>
-                                        <input
-                                            type="password"
-                                            :value="row.value"
-                                            readonly
-                                            :aria-label="`${row.key} value`"
-                                            class="coolify-input"
+                                        <SecretInput
+                                            :value="row.value ?? ''"
+                                            :label="`${row.key} value`"
                                         />
                                     </td>
                                     <td>
@@ -1114,50 +1216,100 @@ onMounted(load);
                 >
                 <SettingsSection
                     v-else-if="section === 'servers' && kind === 'application'"
-                    title="Servers"
+                    title="Servers &amp; Destinations"
                     ><div class="original-table-scroll">
                         <table class="original-table">
                             <thead>
                                 <tr>
                                     <th>Role</th>
                                     <th>Server</th>
-                                    <th>Destination ID</th>
+                                    <th>Destination</th>
+                                    <th>Network</th>
+                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr>
-                                    <td>Primary</td>
+                                <tr
+                                    v-for="dest in attachedDestinations"
+                                    :key="dest.uuid"
+                                >
+                                    <td>{{ dest.is_primary ? 'Primary' : 'Secondary' }}</td>
                                     <td>
-                                        <a :href="`/server/${resource.server_uuid}`">{{
-                                            resource.server_uuid
+                                        <a :href="`/server/${dest.server_uuid}`">{{
+                                            dest.server_uuid
                                         }}</a>
                                     </td>
-                                    <td class="code-text">{{ resource.destination_id }}</td>
+                                    <td>{{ dest.name }}</td>
+                                    <td class="code-text">{{ dest.network }}</td>
+                                    <td>
+                                        <button
+                                            v-if="!dest.is_primary && canEdit"
+                                            type="button"
+                                            class="coolify-btn danger-button"
+                                            :disabled="busy"
+                                            @click="detachDestination(dest.uuid)"
+                                        >
+                                            Detach
+                                        </button>
+                                        <span
+                                            v-else
+                                            class="page-muted"
+                                            >-</span
+                                        >
+                                    </td>
                                 </tr>
                             </tbody>
                         </table>
-                    </div></SettingsSection
+                    </div>
+                    <form
+                        v-if="canEdit"
+                        class="form-grid"
+                        style="margin-top: 14px;"
+                        @submit.prevent="attachDestination"
+                    >
+                        <label class="form-field"
+                            >Attach Secondary Server / Destination<select
+                                v-model="selectedDestinationUuid"
+                                class="coolify-input"
+                            >
+                                <option value="">Select destination...</option>
+                                <option
+                                    v-for="d in allDestinations"
+                                    :key="d.uuid"
+                                    :value="d.uuid"
+                                >
+                                    {{ d.name }} ({{ d.server_uuid }} / {{ d.network }})
+                                </option>
+                            </select></label
+                        >
+                        <div class="page-actions" style="align-items: end;">
+                            <button
+                                type="submit"
+                                class="coolify-btn coolify-btn-primary"
+                                :disabled="busy || !selectedDestinationUuid"
+                            >
+                                Attach
+                            </button>
+                        </div>
+                    </form></SettingsSection
                 >
                 <SettingsSection
                     v-else-if="section === 'metrics'"
                     title="Metrics"
-                    ><div
-                        v-if="serverMetrics && serverMetrics.has_metrics !== false"
-                        class="form-grid"
+                    ><template #actions
+                        ><button
+                            type="button"
+                            class="coolify-btn"
+                            :disabled="busy"
+                            @click="load"
+                        >
+                            Refresh
+                        </button></template
                     >
-                        <div class="form-field">
-                            <strong>CPU Usage</strong>
-                            <p>{{ Math.round(serverMetrics.cpu_percent) }}%</p>
-                        </div>
-                        <div class="form-field">
-                            <strong>Memory Usage</strong>
-                            <p>{{ Math.round(serverMetrics.memory_percent) }}%</p>
-                        </div>
-                        <div class="form-field">
-                            <strong>Disk Usage</strong>
-                            <p>{{ Math.round(serverMetrics.disk_percent) }}%</p>
-                        </div>
-                    </div>
+                    <MetricsChart
+                        v-if="serverMetrics.has_metrics && serverMetrics.history.length"
+                        :history="serverMetrics.history"
+                    />
                     <p
                         v-else
                         class="page-muted"

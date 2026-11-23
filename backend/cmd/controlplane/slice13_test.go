@@ -104,6 +104,10 @@ func TestProductionSlice13_WebCanvasOAuthWebhooksAndUIRoutes(t *testing.T) {
 	// 3. OAuth Settings + Redirect + Callback against real local httptest OIDC provider
 	oauthProv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/token" {
+			_, _ = w.Write([]byte(`{"access_token":"slice13-access-token","token_type":"Bearer"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"sub":"oidc-user-42","email":"oauth-user@coolify.test","name":"OAuth User"}`))
 	}))
 	defer oauthProv.Close()

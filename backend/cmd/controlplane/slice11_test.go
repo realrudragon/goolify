@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,8 +107,17 @@ func TestProductionSlice11_ResourceSubRoutesBackupsAndWorkerExecution(t *testing
 		t.Fatalf("PATCH /api/v1/tags failed: %d", patchTag.StatusCode)
 	}
 
+	s3Mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s3Mock.Close()
+
 	s3Resp := doJSON(t, http.MethodPost, ts.URL+"/api/v1/s3-storages", rootCookies, rootCSRF, "", map[string]any{
-		"name": "primary-s3", "bucket": "coolify-bkp", "region": "us-east-1", "key": "k1", "secret": "s1",
+		"name": "primary-s3", "bucket": "coolify-bkp", "region": "us-east-1", "endpoint": s3Mock.URL, "key": "k1", "secret": "s1",
 	})
 	var s3Out struct{ UUID string `json:"uuid"` }
 	_ = json.NewDecoder(s3Resp.Body).Decode(&s3Out)

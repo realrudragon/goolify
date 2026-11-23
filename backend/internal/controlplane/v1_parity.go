@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -541,6 +542,7 @@ func (a *App) handleNotificationChannel(w http.ResponseWriter, r *http.Request, 
 				response[key] = value
 			}
 		}
+		response["events"] = a.loadNotificationEvents(r.Context(), teamID, string(ch))
 		writeJSON(w, http.StatusOK, response)
 	case http.MethodPatch, http.MethodPut:
 		var raw map[string]any
@@ -629,9 +631,73 @@ func (a *App) handleNotificationChannel(w http.ResponseWriter, r *http.Request, 
 			writeDomainError(w, err)
 			return
 		}
+		if evRaw, ok := raw["events"].(map[string]any); ok {
+			a.saveNotificationEvents(r.Context(), teamID, string(ch), evRaw)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"channel": ch, "enabled": cfg.Enabled, "message": "Saved."})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed."})
+	}
+}
+
+var notificationEventNames = []string{
+	"deployment_success",
+	"deployment_failure",
+	"status_change",
+	"backup_success",
+	"backup_failure",
+	"scheduled_task_success",
+	"scheduled_task_failure",
+	"server_disk_usage",
+	"server_reachable",
+	"server_unreachable",
+}
+
+func notificationChannelTable(ch string) (table string, suffix string, ok bool) {
+	switch ch {
+	case "email", "discord", "slack", "telegram", "pushover", "webhook":
+		return ch + "_notification_settings", "_" + ch + "_notifications", true
+	default:
+		return "", "", false
+	}
+}
+
+func (a *App) loadNotificationEvents(ctx context.Context, teamID int64, ch string) map[string]bool {
+	out := make(map[string]bool, len(notificationEventNames))
+	tbl, suf, ok := notificationChannelTable(ch)
+	if !ok {
+		return out
+	}
+	cols := make([]string, len(notificationEventNames))
+	ptrs := make([]any, len(notificationEventNames))
+	vals := make([]bool, len(notificationEventNames))
+	for i, ev := range notificationEventNames {
+		cols[i] = "COALESCE(" + ev + suf + ", FALSE)"
+		ptrs[i] = &vals[i]
+	}
+	q := fmt.Sprintf(`SELECT %s FROM %s WHERE team_id = $1`, strings.Join(cols, ", "), tbl)
+	if err := a.Pool.QueryRow(ctx, q, teamID).Scan(ptrs...); err == nil {
+		for i, ev := range notificationEventNames {
+			out[ev] = vals[i]
+		}
+	} else {
+		for _, ev := range notificationEventNames {
+			out[ev] = strings.HasSuffix(ev, "_failure") || ev == "server_disk_usage" || ev == "server_unreachable"
+		}
+	}
+	return out
+}
+
+func (a *App) saveNotificationEvents(ctx context.Context, teamID int64, ch string, events map[string]any) {
+	tbl, suf, ok := notificationChannelTable(ch)
+	if !ok || len(events) == 0 {
+		return
+	}
+	for _, ev := range notificationEventNames {
+		if b, exists := events[ev].(bool); exists {
+			q := fmt.Sprintf(`UPDATE %s SET %s = $1, updated_at = NOW() WHERE team_id = $2`, tbl, ev+suf)
+			_, _ = a.Pool.Exec(ctx, q, b, teamID)
+		}
 	}
 }
 

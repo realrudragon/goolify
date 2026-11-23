@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -210,6 +211,55 @@ func (c *S3HTTPClient) DeleteObject(ctx context.Context, s3 S3Target, objectKey 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("s3 DELETE %s failed: HTTP %d", objectKey, resp.StatusCode)
+	}
+	return nil
+}
+
+// HeadBucket performs a real AWS SigV4-signed HEAD request against the configured S3 endpoint & bucket
+// to verify network reachability, TLS, credentials, and bucket existence.
+func (c *S3HTTPClient) HeadBucket(ctx context.Context, s3 S3Target, skipTLS bool) error {
+	if strings.TrimSpace(s3.Bucket) == "" {
+		return errors.New("s3 bucket is required")
+	}
+	target := s3
+	if strings.TrimSpace(target.Endpoint) == "" {
+		target.Endpoint = fmt.Sprintf("https://s3.%s.amazonaws.com", orStr(target.Region, "us-east-1"))
+	}
+	req, err := c.signedRequest(ctx, http.MethodHead, target, "", nil)
+	if err != nil {
+		return err
+	}
+	httpClient := c.client()
+	if skipTLS {
+		httpClient = &http.Client{
+			Timeout: 15 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("s3 connection failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		req2, err2 := c.signedRequest(ctx, http.MethodGet, target, "", nil)
+		if err2 != nil {
+			return err2
+		}
+		resp2, err2 := httpClient.Do(req2)
+		if err2 != nil {
+			return fmt.Errorf("s3 connection failed: %w", err2)
+		}
+		defer func() { _ = resp2.Body.Close() }()
+		if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
+			return fmt.Errorf("s3 bucket check failed: HTTP %d", resp2.StatusCode)
+		}
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("s3 bucket check failed: HTTP %d", resp.StatusCode)
 	}
 	return nil
 }

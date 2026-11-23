@@ -2,8 +2,11 @@ package databases
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -26,18 +29,35 @@ type PersistedDatabase struct {
 	ID              int64     `json:"id"`
 	UUID            string    `json:"uuid"`
 	Name            string    `json:"name"`
+	Description     string    `json:"description,omitempty"`
 	Type            string    `json:"type"`
 	Image           string    `json:"image"`
+	IsPublic        bool      `json:"is_public"`
 	CustomPort      int       `json:"custom_port"`
+	PublicPort      int       `json:"public_port"`
 	Status          string    `json:"status"`
 	TeamID          int64     `json:"team_id"`
 	EnvironmentID   int64     `json:"environment_id"`
 	EnvironmentUUID string    `json:"environment_uuid,omitempty"`
 	ProjectUUID     string    `json:"project_uuid,omitempty"`
 	ServerUUID      string    `json:"server_uuid"`
+	ServerIP        string    `json:"-"`
 	IsInstanceDB    bool      `json:"is_instance_db"`
-	Password        string    `json:"password,omitempty"` // Only populated when ActionReadSensitive succeeds
+	Password        string    `json:"password,omitempty"`        // Only populated when ActionReadSensitive succeeds
+	InternalDBURL   string    `json:"internal_db_url,omitempty"` // Only populated when ActionReadSensitive succeeds
+	ExternalDBURL   string    `json:"external_db_url,omitempty"` // Only populated when is_public && ActionReadSensitive succeeds
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type DatabaseUpdateInput struct {
+	Name           *string `json:"name"`
+	Description    *string `json:"description"`
+	Image          *string `json:"image"`
+	IsPublic       *bool   `json:"is_public"`
+	CustomPort     *int    `json:"custom_port"`
+	PublicPort     *int    `json:"public_port"`
+	Password       *string `json:"password"`
+	RotatePassword bool    `json:"rotate_password"`
 }
 
 type PostgresDatabaseManager struct {
@@ -162,6 +182,9 @@ func (m *PostgresDatabaseManager) Create(ctx context.Context, principal auth.Pri
 		}
 	}
 
+	if strings.TrimSpace(plainPassword) == "" && spec.passCol != "" {
+		plainPassword = generateSecurePassword()
+	}
 	encPass := plainPassword
 	if m.cipher != nil && plainPassword != "" {
 		enc, err := m.cipher.EncryptLaravelPayload([]byte(plainPassword), false)
@@ -286,8 +309,52 @@ func (m *PostgresDatabaseManager) GetByUUID(ctx context.Context, principal auth.
 				db.Password = encPass
 			}
 		}
+		db.InternalDBURL, db.ExternalDBURL = buildDatabaseURLs(db)
 	}
 	return db, nil
+}
+
+func buildDatabaseURLs(db PersistedDatabase) (internalURL, externalURL string) {
+	pass := url.QueryEscape(db.Password)
+	host := "coolify-db-" + db.UUID
+	extHost := db.ServerIP
+	if extHost == "" {
+		extHost = "localhost"
+	}
+	switch db.Type {
+	case "postgresql":
+		internalURL = fmt.Sprintf("postgres://postgres:%s@%s:5432/postgres", pass, host)
+		if db.IsPublic && db.PublicPort > 0 {
+			externalURL = fmt.Sprintf("postgres://postgres:%s@%s:%d/postgres", pass, extHost, db.PublicPort)
+		}
+	case "mysql", "mariadb":
+		internalURL = fmt.Sprintf("mysql://mysql:%s@%s:3306/default", pass, host)
+		if db.IsPublic && db.PublicPort > 0 {
+			externalURL = fmt.Sprintf("mysql://mysql:%s@%s:%d/default", pass, extHost, db.PublicPort)
+		}
+	case "mongodb":
+		internalURL = fmt.Sprintf("mongodb://root:%s@%s:27017/default", pass, host)
+		if db.IsPublic && db.PublicPort > 0 {
+			externalURL = fmt.Sprintf("mongodb://root:%s@%s:%d/default", pass, extHost, db.PublicPort)
+		}
+	case "redis", "keydb", "dragonfly":
+		internalURL = fmt.Sprintf("redis://default:%s@%s:6379/0", pass, host)
+		if db.IsPublic && db.PublicPort > 0 {
+			externalURL = fmt.Sprintf("redis://default:%s@%s:%d/0", pass, extHost, db.PublicPort)
+		}
+	case "clickhouse":
+		internalURL = fmt.Sprintf("http://default:%s@%s:8123", pass, host)
+		if db.IsPublic && db.PublicPort > 0 {
+			externalURL = fmt.Sprintf("http://default:%s@%s:%d", pass, extHost, db.PublicPort)
+		}
+	}
+	return internalURL, externalURL
+}
+
+func generateSecurePassword() string {
+	buf := make([]byte, 16)
+	_, _ = rand.Read(buf)
+	return hex.EncodeToString(buf)
 }
 
 func (m *PostgresDatabaseManager) ListByTeam(ctx context.Context, principal auth.Principal, teamID int64) ([]PersistedDatabase, error) {
@@ -348,28 +415,86 @@ func (m *PostgresDatabaseManager) ListByTeam(ctx context.Context, principal auth
 }
 
 func (m *PostgresDatabaseManager) UpdatePort(ctx context.Context, principal auth.Principal, dbUUID string, port int) (PersistedDatabase, error) {
+	return m.UpdateConfig(ctx, principal, dbUUID, DatabaseUpdateInput{PublicPort: &port})
+}
+
+func (m *PostgresDatabaseManager) UpdateConfig(ctx context.Context, principal auth.Principal, dbUUID string, in DatabaseUpdateInput) (PersistedDatabase, error) {
 	spec, db, _, err := m.loadRawWithSpec(ctx, dbUUID)
 	if err != nil {
 		return PersistedDatabase{}, err
 	}
 	teamID := db.TeamID
-	if err := m.authz.Check(ctx, principal, access.ActionUpdate, access.ResourceRef{
+	ref := access.ResourceRef{
 		Type: "database", ID: db.ID, UUID: db.UUID, ProjectUUID: db.ProjectUUID, EnvironmentUUID: db.EnvironmentUUID, TeamID: &teamID, APISegment: "databases",
-	}); err != nil {
+	}
+	if err := m.authz.Check(ctx, principal, access.ActionUpdate, ref); err != nil {
 		return PersistedDatabase{}, err
 	}
-	if db.IsInstanceDB {
-		return PersistedDatabase{}, errors.New("cannot modify sentinel instance database coolify-db port")
+
+	portPtr := in.PublicPort
+	if portPtr == nil {
+		portPtr = in.CustomPort
 	}
-	if !spec.hasPublicPort {
-		return PersistedDatabase{}, fmt.Errorf("%s does not support public_port", db.Type)
+	if db.IsInstanceDB && (portPtr != nil || in.Password != nil || in.RotatePassword || in.IsPublic != nil || in.Image != nil) {
+		return PersistedDatabase{}, errors.New("cannot modify sentinel instance database coolify-db configuration")
 	}
-	q := fmt.Sprintf(`UPDATE %s SET public_port = $2, updated_at = NOW() WHERE id = $1 RETURNING updated_at`, spec.table)
-	if err := m.pool.QueryRow(ctx, q, db.ID, port).Scan(&db.UpdatedAt); err != nil {
-		return PersistedDatabase{}, err
+
+	if in.Name != nil && strings.TrimSpace(*in.Name) != "" {
+		db.Name = compat.SanitizeString(*in.Name)
 	}
-	db.CustomPort = port
-	return db, nil
+	if in.Description != nil {
+		db.Description = compat.SanitizeString(*in.Description)
+	}
+	if in.Image != nil && strings.TrimSpace(*in.Image) != "" {
+		db.Image = strings.TrimSpace(*in.Image)
+	}
+	if in.IsPublic != nil {
+		db.IsPublic = *in.IsPublic
+	}
+	if portPtr != nil {
+		if !spec.hasPublicPort {
+			return PersistedDatabase{}, fmt.Errorf("%s does not support public_port", db.Type)
+		}
+		db.CustomPort = *portPtr
+		db.PublicPort = *portPtr
+	}
+
+	if spec.hasPublicPort {
+		q := fmt.Sprintf(`UPDATE %s SET name = $2, description = $3, image = $4, is_public = $5, public_port = $6, updated_at = NOW() WHERE id = $1 RETURNING updated_at`, spec.table)
+		if err := m.pool.QueryRow(ctx, q, db.ID, db.Name, db.Description, db.Image, db.IsPublic, db.PublicPort).Scan(&db.UpdatedAt); err != nil {
+			return PersistedDatabase{}, err
+		}
+	} else {
+		q := fmt.Sprintf(`UPDATE %s SET name = $2, description = $3, image = $4, is_public = $5, updated_at = NOW() WHERE id = $1 RETURNING updated_at`, spec.table)
+		if err := m.pool.QueryRow(ctx, q, db.ID, db.Name, db.Description, db.Image, db.IsPublic).Scan(&db.UpdatedAt); err != nil {
+			return PersistedDatabase{}, err
+		}
+	}
+
+	newPass := ""
+	if in.RotatePassword {
+		newPass = generateSecurePassword()
+	} else if in.Password != nil && strings.TrimSpace(*in.Password) != "" {
+		newPass = *in.Password
+	}
+	if newPass != "" {
+		if spec.passCol == "" {
+			return PersistedDatabase{}, fmt.Errorf("%s does not support password credentials", db.Type)
+		}
+		stored := newPass
+		if m.cipher != nil {
+			enc, encErr := m.cipher.EncryptLaravelPayload([]byte(newPass), false)
+			if encErr != nil {
+				return PersistedDatabase{}, encErr
+			}
+			stored = enc
+		}
+		if err := m.pool.QueryRow(ctx, fmt.Sprintf(`UPDATE %s SET %s = $2, updated_at = NOW() WHERE id = $1 RETURNING updated_at`, spec.table, spec.passCol), db.ID, stored).Scan(&db.UpdatedAt); err != nil {
+			return PersistedDatabase{}, err
+		}
+	}
+
+	return m.GetByUUID(ctx, principal, dbUUID)
 }
 
 func (m *PostgresDatabaseManager) Delete(ctx context.Context, principal auth.Principal, dbUUID string) error {
@@ -452,9 +577,9 @@ func (m *PostgresDatabaseManager) loadRawWithSpec(ctx context.Context, dbUUID st
 			whereClause = "(d.uuid = $1 OR d.id = 0) AND d.deleted_at IS NULL"
 		}
 		q := fmt.Sprintf(`
-			SELECT d.id, d.uuid, d.name, d.image, %s, d.status,
+			SELECT d.id, d.uuid, d.name, COALESCE(d.description, ''), d.image, COALESCE(d.is_public, FALSE), %s, d.status,
 			       COALESCE(d.environment_id, 0), COALESCE(e.uuid,''), COALESCE(p.uuid,''),
-			       COALESCE(p.team_id, srv.team_id, 0), COALESCE(srv.uuid,'localhost'), %s, d.updated_at
+			       COALESCE(p.team_id, srv.team_id, 0), COALESCE(srv.uuid,'localhost'), COALESCE(srv.ip,'localhost'), %s, d.updated_at
 			FROM %s d
 			LEFT JOIN environments e ON e.id = d.environment_id
 			LEFT JOIN projects p ON p.id = e.project_id
@@ -468,10 +593,11 @@ func (m *PostgresDatabaseManager) loadRawWithSpec(ctx context.Context, dbUUID st
 		var encPass string
 		db.Type = spec.dbType
 		err := m.pool.QueryRow(ctx, q, dbUUID).Scan(
-			&db.ID, &db.UUID, &db.Name, &db.Image, &db.CustomPort,
-			&db.Status, &db.EnvironmentID, &db.EnvironmentUUID, &db.ProjectUUID, &db.TeamID, &db.ServerUUID, &encPass, &db.UpdatedAt,
+			&db.ID, &db.UUID, &db.Name, &db.Description, &db.Image, &db.IsPublic, &db.CustomPort,
+			&db.Status, &db.EnvironmentID, &db.EnvironmentUUID, &db.ProjectUUID, &db.TeamID, &db.ServerUUID, &db.ServerIP, &encPass, &db.UpdatedAt,
 		)
 		if err == nil {
+			db.PublicPort = db.CustomPort
 			if spec.dbType == "postgresql" && db.ID == 0 {
 				db.IsInstanceDB = true
 			}

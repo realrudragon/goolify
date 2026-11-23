@@ -42,22 +42,27 @@ const filtered = computed(() =>
     ),
 );
 async function load() {
+    const token = lifecycle.beginLoad();
     error.value = '';
     try {
-        servers.value = await apiRequest<Server[]>('/api/v1/servers', { signal: lifecycle.signal });
+        const list = await apiRequest<Server[]>('/api/v1/servers', { signal: token.signal });
+        if (!token.isCurrent()) return;
+        servers.value = list;
         await Promise.allSettled(
-            servers.value.map(async (server) => {
+            list.map(async (server) => {
                 const resources = await apiRequest<unknown[]>(
                     `/api/v1/servers/${encodeURIComponent(server.uuid)}/resources`,
-                    { signal: lifecycle.signal },
+                    { signal: token.signal },
                 );
+                if (!token.isCurrent()) return;
                 counts.value[server.uuid] = resources.length;
             }),
         );
     } catch (err) {
+        if (!token.isCurrent()) return;
         error.value = (err as Error).message;
     } finally {
-        loading.value = false;
+        if (token.isCurrent()) loading.value = false;
     }
 }
 function setMode(value: 'table' | 'grid') {

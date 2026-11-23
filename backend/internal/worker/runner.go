@@ -19,6 +19,7 @@ import (
 	"github.com/coollabsio/coolify/backend/internal/domains/deployments"
 	"github.com/coollabsio/coolify/backend/internal/domains/notifications"
 	"github.com/coollabsio/coolify/backend/internal/domains/ops"
+	"github.com/coollabsio/coolify/backend/internal/domains/proxy"
 	"github.com/coollabsio/coolify/backend/internal/domains/schedules"
 	"github.com/coollabsio/coolify/backend/internal/executor"
 	"github.com/coollabsio/coolify/backend/internal/jobs"
@@ -475,6 +476,92 @@ func (r *Runner) prepareExecutionCommand(ctx context.Context, spec jobs.DurableJ
 			}
 			cmds = append(cmds, fmt.Sprintf("docker compose --project-name '%s' -f docker-compose.yaml up -d --remove-orphans", safeUUID))
 			return "ssh_exec", strings.Join(cmds, " && "), secrets, nil
+		}
+	}
+	if (spec.JobType == "proxy_start" || spec.JobType == "proxy_restart" || spec.JobType == "proxy_stop") && r.cfg.Pool != nil {
+		if spec.JobType == "proxy_stop" {
+			return "ssh_exec", proxy.BuildStopProxyCommand(), nil, nil
+		}
+		var srvID int64
+		var proxyType, customCfg string
+		_ = r.cfg.Pool.QueryRow(ctx, `
+			SELECT id, COALESCE(proxy->>'type', 'traefik'), COALESCE(proxy->>'custom_configuration', '')
+			FROM servers WHERE uuid = $1 AND deleted_at IS NULL
+		`, spec.ServerUUID).Scan(&srvID, &proxyType, &customCfg)
+		if proxyType == "" {
+			proxyType = "traefik"
+		}
+		var networks []string
+		if nRows, nErr := r.cfg.Pool.Query(ctx, `SELECT DISTINCT COALESCE(NULLIF(network,''), 'coolify') FROM standalone_dockers WHERE server_id = $1`, srvID); nErr == nil {
+			for nRows.Next() {
+				var netName string
+				if nRows.Scan(&netName) == nil {
+					networks = append(networks, netName)
+				}
+			}
+			nRows.Close()
+		}
+		var proxyRes []proxy.ProxyResource
+		if aRows, aErr := r.cfg.Pool.Query(ctx, `
+			SELECT a.uuid, COALESCE(a.fqdn,''), COALESCE(NULLIF(a.ports_exposes,''), '80')
+			FROM applications a
+			JOIN standalone_dockers sd ON sd.id = a.destination_id
+			WHERE sd.server_id = $1 AND COALESCE(a.fqdn,'') <> ''
+		`, srvID); aErr == nil {
+			for aRows.Next() {
+				var u, fqdn, portStr string
+				if aRows.Scan(&u, &fqdn, &portStr) == nil {
+					p := strings.TrimSpace(strings.Split(portStr, ",")[0])
+					if p == "" {
+						p = "80"
+					}
+					for _, domain := range strings.Split(fqdn, ",") {
+						domain = strings.TrimSpace(domain)
+						if domain != "" {
+							proxyRes = append(proxyRes, proxy.ProxyResource{
+								UUID:     u,
+								FQDN:     domain,
+								Upstream: fmt.Sprintf("http://%s:%s", u, p),
+								TLS:      strings.HasPrefix(strings.ToLower(domain), "https://"),
+							})
+						}
+					}
+				}
+			}
+			aRows.Close()
+		}
+		gen := proxy.NewProxyConfigGenerator()
+		bundle, err := gen.RenderWithNetworks(proxyType, networks, proxyRes)
+		if err != nil {
+			bundle, _ = gen.RenderWithNetworks("traefik", networks, proxyRes)
+		}
+		composeYAML := bundle.ComposeYAML
+		if strings.TrimSpace(customCfg) != "" {
+			composeYAML = customCfg
+		}
+		return "ssh_exec", proxy.BuildStartProxyCommand(proxyType, composeYAML, bundle.Dynamic, networks), nil, nil
+	}
+	if (spec.JobType == "db_provision" || spec.JobType == "db_start" || spec.JobType == "db_restart") && r.cfg.Pool != nil {
+		dbSvc := databases.NewPostgresDatabaseManager(r.cfg.Pool, access.NewAuthorizer(), compat.NewEloquentHooks(), r.cfg.Cipher, r.cfg.Outbox, r.cfg.JobCoord)
+		sysPrincipal := auth.Principal{
+			UserID: -1, AuthMethod: "session", SessionTeamID: spec.TeamID,
+			TeamRoles: map[int64]auth.Role{spec.TeamID: auth.RoleOwner}, TeamWideAccess: map[int64]bool{spec.TeamID: true},
+		}
+		if dbRec, dbErr := dbSvc.GetByUUID(ctx, sysPrincipal, spec.ResourceUUID); dbErr == nil {
+			var secrets []string
+			if dbRec.Password != "" {
+				secrets = append(secrets, dbRec.Password)
+			}
+			return "ssh_exec", ops.BuildDatabaseStartCommandFull(ops.DatabaseStartSpec{
+				DBType:       dbRec.Type,
+				ResourceUUID: dbRec.UUID,
+				Image:        dbRec.Image,
+				OperationID:  spec.OperationID,
+				Network:      "coolify",
+				Password:     dbRec.Password,
+				IsPublic:     dbRec.IsPublic,
+				PublicPort:   dbRec.PublicPort,
+			}), secrets, nil
 		}
 	}
 	capStr, cmdStr := r.buildExecutionCommand(spec)

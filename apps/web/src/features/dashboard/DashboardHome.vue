@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import AppIcon from '../../components/AppIcon.vue';
+import OnboardingBanner from '../../components/OnboardingBanner.vue';
 import CanvasGraph from '../canvas/CanvasGraph.vue';
 import { apiRequest } from '../../lib/api';
 import { session } from '../../lib/session';
@@ -50,6 +51,7 @@ const apps = ref<Resource[]>([]);
 const environments = ref<Environment[]>([]);
 const deployments = ref<Deployment[]>([]);
 const loading = ref(true);
+const showBoarding = ref(false);
 const errors = ref<Record<string, string>>({});
 const usage = ref<Record<string, { cpu_percent: number; memory_percent: number }>>({});
 const projectDialog = ref<HTMLDialogElement>();
@@ -97,6 +99,7 @@ async function load() {
         apiRequest<Resource[]>('/api/v1/services', { signal }),
         apiRequest<Resource[]>('/api/v1/databases', { signal }),
         apiRequest<Deployment[]>('/api/v1/deployments', { signal }),
+        apiRequest<{ show_boarding?: boolean }>('/api/v1/team', { signal }),
     ] as const);
     if (current !== generation || signal.aborted) return;
     const [
@@ -106,7 +109,10 @@ async function load() {
         serviceResult,
         databaseResult,
         deploymentResult,
+        teamResult,
     ] = result;
+    showBoarding.value =
+        teamResult.status === 'fulfilled' && Boolean(teamResult.value?.show_boarding);
     if (projectResult.status === 'fulfilled') projects.value = projectResult.value;
     else errors.value.projects = projectResult.reason.message;
     if (serverResult.status === 'fulfilled') servers.value = serverResult.value;
@@ -120,68 +126,75 @@ async function load() {
     const resources = resourceResults.flatMap((item) =>
         item.status === 'fulfilled' ? item.value : [],
     );
-    if (serverResult.status === 'fulfilled') {
-        const metrics = await Promise.allSettled(
-            serverResult.value.map(async (server) => {
-                const values = await apiRequest<{
-                    cpu_percent: number;
-                    memory_percent: number;
-                    disk_percent?: number;
-                    has_metrics?: boolean;
-                }>(`/canvas/api/servers/${encodeURIComponent(server.uuid)}/canvas/usage`, {
-                    signal,
-                });
-                if (
-                    values.has_metrics === false ||
-                    !Number.isFinite(values.cpu_percent) ||
-                    !Number.isFinite(values.memory_percent)
-                ) {
-                    return null;
-                }
-                return { uuid: server.uuid, values };
-            }),
-        );
-        if (current !== generation || signal.aborted) return;
-        usage.value = Object.fromEntries(
-            metrics.flatMap((metric) =>
-                metric.status === 'fulfilled' && metric.value
-                    ? [[metric.value.uuid, metric.value.values]]
-                    : [],
-            ),
-        );
-    }
-    if (projectResult.status === 'fulfilled') {
-        const details = await Promise.allSettled(
-            projectResult.value.map((project) =>
-                apiRequest<Environment[]>(
-                    `/api/v1/projects/${encodeURIComponent(project.uuid)}/environments`,
-                    { signal },
-                ),
-            ),
-        );
-        if (current !== generation || signal.aborted) return;
-        environments.value = details.flatMap((item) =>
-            item.status === 'fulfilled' ? item.value : [],
-        );
-        projects.value = projectResult.value.map((project, index) => {
-            const detail = details[index];
-            return {
-                ...project,
-                environmentCount: detail.status === 'fulfilled' ? detail.value.length : undefined,
-                resourceCount: resourcesAvailable
-                    ? resources.filter(
-                          (resource) =>
-                              resource.project_uuid === project.uuid ||
-                              environments.value.some(
-                                  (env) =>
-                                      env.project_id === project.id &&
-                                      env.id === resource.environment_id,
-                              ),
-                      ).length
-                    : undefined,
-            };
-        });
-    }
+    const envTask =
+        projectResult.status === 'fulfilled'
+            ? Promise.allSettled(
+                  projectResult.value.map((project) =>
+                      apiRequest<Environment[]>(
+                          `/api/v1/projects/${encodeURIComponent(project.uuid)}/environments`,
+                          { signal },
+                      ),
+                  ),
+              ).then((details) => {
+                  if (current !== generation || signal.aborted) return;
+                  environments.value = details.flatMap((item) =>
+                      item.status === 'fulfilled' ? item.value : [],
+                  );
+                  projects.value = projectResult.value.map((project, index) => {
+                      const detail = details[index];
+                      return {
+                          ...project,
+                          environmentCount:
+                              detail.status === 'fulfilled' ? detail.value.length : undefined,
+                          resourceCount: resourcesAvailable
+                              ? resources.filter(
+                                    (resource) =>
+                                        resource.project_uuid === project.uuid ||
+                                        environments.value.some(
+                                            (env) =>
+                                                env.project_id === project.id &&
+                                                env.id === resource.environment_id,
+                                        ),
+                                ).length
+                              : undefined,
+                      };
+                  });
+              })
+            : Promise.resolve();
+    const metricsTask =
+        serverResult.status === 'fulfilled'
+            ? Promise.allSettled(
+                  serverResult.value.map(async (server) => {
+                      const values = await apiRequest<{
+                          cpu_percent: number;
+                          memory_percent: number;
+                          disk_percent?: number;
+                          has_metrics?: boolean;
+                      }>(`/canvas/api/servers/${encodeURIComponent(server.uuid)}/canvas/usage`, {
+                          signal,
+                      });
+                      if (
+                          values.has_metrics === false ||
+                          !Number.isFinite(values.cpu_percent) ||
+                          !Number.isFinite(values.memory_percent)
+                      ) {
+                          return null;
+                      }
+                      return { uuid: server.uuid, values };
+                  }),
+              ).then((metrics) => {
+                  if (current !== generation || signal.aborted) return;
+                  usage.value = Object.fromEntries(
+                      metrics.flatMap((metric) =>
+                          metric.status === 'fulfilled' && metric.value
+                              ? [[metric.value.uuid, metric.value.values]]
+                              : [],
+                      ),
+                  );
+              })
+            : Promise.resolve();
+    await Promise.all([envTask, metricsTask]);
+    if (current !== generation || signal.aborted) return;
     loading.value = false;
 }
 
@@ -312,6 +325,12 @@ defineExpose({
         data-testid="dashboard-home"
     >
         <div class="dashboard-primary">
+            <OnboardingBanner
+                v-if="showBoarding"
+                :has-projects="projects.length > 0"
+                :has-ready-server="servers.some((s) => s.is_reachable && s.is_usable)"
+                @completed="showBoarding = false"
+            />
             <section aria-labelledby="projects-heading">
                 <div class="section-heading">
                     <div>

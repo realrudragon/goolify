@@ -219,6 +219,11 @@ body:has(.mobile-navigation[open]) { overflow: hidden; }
 .auth-optional { color: var(--ui-fg-faint); font-size: 12px; font-weight: 400; }
 .auth-submit { width: 100%; justify-content: center; }
 .auth-alert { margin: 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--ui-error) 8%, var(--ui-canvas)); color: var(--ui-error); }
+.auth-notice { margin: 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--ui-success) 10%, var(--ui-canvas)); color: var(--ui-success); font-size: 13px; }
+.auth-oauth-list { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ui-well-border); }
+.auth-links { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.auth-link-btn { background: none; border: 0; padding: 0; color: var(--ui-fg-dim); font-size: 12px; cursor: pointer; text-decoration: underline; }
+.auth-link-btn:hover { color: var(--ui-fg); }
 .auth-attribution { margin: 0; max-width: 432px; text-align: center; font-size: 12px; color: var(--ui-fg-faint); }
 .coolify-btn { transition: transform 80ms ease-out, background-color 120ms ease-out; }
 .coolify-btn:not(:disabled):hover { transform: translateY(-1px); }

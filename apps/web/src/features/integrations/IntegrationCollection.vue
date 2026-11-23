@@ -147,6 +147,7 @@ const lifecycle = usePageLifecycle();
 const items = ref<Item[]>([]);
 const search = ref('');
 const mode = ref<'table' | 'grid'>('table');
+const linkedResources = ref<{ uuid: string; name: string; type: string }[]>([]);
 const error = ref('');
 const message = ref('');
 const loading = ref(true);
@@ -211,6 +212,12 @@ async function load() {
             if (!detail.value)
                 throw new Error(`${config.value.singular} not found or access denied.`);
             setEditing(detail.value);
+            if (props.subpage === 'resources') {
+                linkedResources.value = await apiRequest(
+                    `/api/v1/integration-resources?kind=${encodeURIComponent(props.kind)}&uuid=${encodeURIComponent(props.uuid)}`,
+                    { signal: lifecycle.signal },
+                );
+            }
         }
     } catch (err) {
         error.value = (err as Error).message;
@@ -298,6 +305,24 @@ onMounted(() => {
     if (saved === 'grid') mode.value = 'grid';
     void load();
 });
+async function validateStorage(storageUuid: string) {
+    if (!canEdit.value || saving.value) return;
+    saving.value = true;
+    error.value = '';
+    message.value = '';
+    try {
+        const res = await apiRequest<{ message?: string }>(
+            `/api/v1/s3-storages/${encodeURIComponent(storageUuid)}/validate`,
+            { method: 'POST', body: '{}' },
+        );
+        message.value = res.message ?? 'S3 storage validated.';
+        await load();
+    } catch (err) {
+        error.value = (err as Error).message;
+    } finally {
+        saving.value = false;
+    }
+}
 function setMode(value: 'table' | 'grid') {
     mode.value = value;
     localStorage.setItem(`coolify-${props.kind}-view`, value);
@@ -395,11 +420,35 @@ function setMode(value: 'table' | 'grid') {
                 <SettingsSection
                     v-else-if="subpage === 'resources'"
                     title="Resources"
-                    ><p
-                        class="page-error"
-                        role="alert"
+                    ><div
+                        v-if="linkedResources.length"
+                        class="original-table-scroll"
                     >
-                        Resource usage for this integration is not available yet.
+                        <table class="original-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>UUID</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="res in linkedResources"
+                                    :key="res.uuid"
+                                >
+                                    <td>{{ res.name }}</td>
+                                    <td>{{ res.type }}</td>
+                                    <td class="code-text">{{ res.uuid }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p
+                        v-else
+                        class="page-muted"
+                    >
+                        No resources are currently using this {{ config.singular.toLowerCase() }}.
                     </p></SettingsSection
                 >
                 <form
@@ -408,6 +457,14 @@ function setMode(value: 'table' | 'grid') {
                 >
                     <SettingsSection title="General"
                         ><template #actions
+                            ><button
+                                v-if="canEdit && kind === 'storages' && detail"
+                                class="coolify-btn"
+                                type="button"
+                                :disabled="saving"
+                                @click="validateStorage(detail.uuid)"
+                            >
+                                Validate Connection</button
                             ><button
                                 v-if="canEdit"
                                 class="coolify-btn coolify-btn-primary"

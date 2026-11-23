@@ -73,7 +73,25 @@ const canEdit = computed(
             session.me?.teams.find((team) => team.id === teamId.value)?.role?.toLowerCase() ?? '',
         ),
 );
-const dirty = computed(() => JSON.stringify(config.value) !== JSON.stringify(initial.value));
+const eventPrefs = ref<Record<string, boolean>>({});
+const initialEvents = ref<Record<string, boolean>>({});
+const eventList: [string, string][] = [
+    ['deployment_success', 'Deployment Success'],
+    ['deployment_failure', 'Deployment Failure'],
+    ['status_change', 'Container Status Change'],
+    ['backup_success', 'Backup Success'],
+    ['backup_failure', 'Backup Failure'],
+    ['scheduled_task_success', 'Scheduled Task Success'],
+    ['scheduled_task_failure', 'Scheduled Task Failure'],
+    ['server_disk_usage', 'Server High Disk Usage'],
+    ['server_reachable', 'Server Reachable'],
+    ['server_unreachable', 'Server Unreachable'],
+];
+const dirty = computed(
+    () =>
+        JSON.stringify(config.value) !== JSON.stringify(initial.value) ||
+        JSON.stringify(eventPrefs.value) !== JSON.stringify(initialEvents.value),
+);
 let generation = 0;
 let controller: AbortController | undefined;
 lifecycle.registerCleanup(() => {
@@ -107,6 +125,12 @@ async function load() {
                 saved[field.key] ?? (field.type === 'number' && canEdit.value ? 587 : '');
         config.value = fields;
         initial.value = { ...fields };
+        const evs: Record<string, boolean> = {};
+        for (const [k] of eventList) {
+            evs[k] = Boolean(saved.events?.[k]);
+        }
+        eventPrefs.value = evs;
+        initialEvents.value = { ...evs };
     } catch (err) {
         if (current === generation && !controller.signal.aborted)
             error.value = (err as Error).message;
@@ -127,7 +151,11 @@ async function save() {
         );
         await apiRequest(`/api/v1/notifications/${props.channel}`, {
             method: 'PATCH',
-            body: JSON.stringify({ ...changed, expected_team_id: teamId.value }),
+            body: JSON.stringify({
+                ...changed,
+                events: eventPrefs.value,
+                expected_team_id: teamId.value,
+            }),
         });
         await load();
         if (!error.value) status.value = 'Saved.';
@@ -287,6 +315,23 @@ onMounted(load);
                             "
                             autocomplete="off"
                     /></label>
+                </div>
+            </SettingsSection>
+            <SettingsSection
+                title="Event Preferences"
+                helper="Choose which events trigger notifications on this channel."
+            >
+                <div class="form-grid">
+                    <label
+                        v-for="[key, label] in eventList"
+                        :key="key"
+                        class="check-field"
+                        ><input
+                            v-model="eventPrefs[key]"
+                            type="checkbox"
+                            :disabled="!canEdit"
+                        />{{ label }}</label
+                    >
                 </div>
             </SettingsSection>
         </form>

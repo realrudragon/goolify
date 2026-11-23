@@ -79,7 +79,38 @@ const configFields = computed(() =>
                 { key: 'is_api_enabled', label: 'API access enabled', type: 'checkbox' },
                 { key: 'is_mcp_server_enabled', label: 'MCP server enabled', type: 'checkbox' },
             ]
-          : [{ key: 'instance_name', label: 'Instance name' }],
+          : props.subpage === 'updates'
+            ? [
+                  { key: 'is_auto_update_enabled', label: 'Auto-update enabled', type: 'checkbox' },
+                  { key: 'auto_update_frequency', label: 'Auto-update schedule (cron)' },
+                  { key: 'update_check_frequency', label: 'Update check schedule (cron)' },
+              ]
+            : props.subpage === 'email'
+              ? [
+                    { key: 'smtp_enabled', label: 'Enable SMTP', type: 'checkbox' },
+                    { key: 'smtp_host', label: 'SMTP Host' },
+                    { key: 'smtp_port', label: 'SMTP Port', type: 'number' },
+                    { key: 'smtp_username', label: 'SMTP Username' },
+                    { key: 'smtp_password', label: 'SMTP Password', type: 'password' },
+                    { key: 'smtp_from_address', label: 'SMTP From Address' },
+                    { key: 'smtp_from_name', label: 'SMTP From Name' },
+                    { key: 'resend_enabled', label: 'Enable Resend', type: 'checkbox' },
+                    { key: 'resend_api_key', label: 'Resend API Key', type: 'password' },
+                    { key: 'resend_from_address', label: 'Resend From Address' },
+                    { key: 'resend_from_name', label: 'Resend From Name' },
+                ]
+              : props.subpage === 'image-scanning'
+                ? [
+                      { key: 'enabled', label: 'Enable image vulnerability scanning', type: 'checkbox' },
+                      { key: 'block_on_critical', label: 'Block deploy on Critical CVEs', type: 'checkbox' },
+                      { key: 'block_on_high', label: 'Block deploy on High CVEs', type: 'checkbox' },
+                  ]
+                : [
+                      { key: 'instance_name', label: 'Instance name' },
+                      { key: 'fqdn', label: 'Instance Domain (FQDN)' },
+                      { key: 'instance_timezone', label: 'Instance Timezone' },
+                      { key: 'allowed_ips', label: 'Allowed IPs (comma-separated)' },
+                  ],
 );
 async function load() {
     error.value = '';
@@ -91,8 +122,16 @@ async function load() {
                     ...(list.value.find((p) => p.provider === oauthProvider.value) ?? {}),
                     client_secret: '',
                 };
-            } else if (['general', 'advanced'].includes(props.subpage))
-                form.value = await apiRequest('/api/v1/settings', { signal: lifecycle.signal });
+            } else if (['general', 'advanced', 'updates', 'email'].includes(props.subpage)) {
+                const loaded = await apiRequest<Record<string, any>>('/api/v1/settings', {
+                    signal: lifecycle.signal,
+                });
+                form.value = { ...loaded, smtp_password: '', resend_api_key: '' };
+            } else if (props.subpage === 'image-scanning') {
+                form.value = await apiRequest('/api/v1/security/image-scan-policy', {
+                    signal: lifecycle.signal,
+                });
+            }
         } else if (props.page === 'team') {
             form.value = await apiRequest('/api/v1/team', { signal: lifecycle.signal });
             if (props.subpage === 'members')
@@ -122,13 +161,19 @@ async function save() {
                 ? '/api/v1/team'
                 : oauthProvider.value
                   ? `/app/settings/oauth/${oauthProvider.value}`
-                  : '/api/v1/settings';
+                  : props.subpage === 'image-scanning'
+                    ? '/api/v1/security/image-scan-policy'
+                    : '/api/v1/settings';
+        const secretKeys = new Set(['client_secret', 'smtp_password', 'resend_api_key']);
         const keys =
             props.page === 'team' ? ['name', 'description'] : configFields.value.map((f) => f.key);
         const body = Object.fromEntries(
             keys
-                .filter((key) => key !== 'client_secret' || form.value[key])
-                .map((key) => [key, form.value[key]]),
+                .filter((key) => !secretKeys.has(key) || form.value[key])
+                .map((key) => [
+                    key,
+                    key === 'smtp_port' ? Number(form.value[key]) || 587 : form.value[key],
+                ]),
         );
         await apiRequest(endpoint, { method: 'PATCH', body: JSON.stringify(body) });
         await load();
@@ -297,10 +342,21 @@ onMounted(() => {
                 </p>
             </div>
             <form
-                v-else-if="['general', 'advanced'].includes(subpage)"
+                v-else-if="['general', 'advanced', 'updates', 'email', 'image-scanning'].includes(subpage)"
                 @submit.prevent="save"
             >
-                <SettingsSection :title="subpage === 'general' ? 'General' : 'Access'"
+                <SettingsSection
+                    :title="
+                        subpage === 'general'
+                            ? 'General'
+                            : subpage === 'advanced'
+                              ? 'Access'
+                              : subpage === 'updates'
+                                ? 'Updates'
+                                : subpage === 'email'
+                                  ? 'Instance Email'
+                                  : 'Image Scanning Policy'
+                    "
                     ><template #actions
                         ><button
                             type="submit"
@@ -324,6 +380,12 @@ onMounted(() => {
                             }}<input
                                 v-if="field.type !== 'checkbox'"
                                 v-model="form[field.key]"
+                                :type="field.type ?? 'text'"
+                                :placeholder="
+                                    field.type === 'password'
+                                        ? 'Leave empty to keep current value'
+                                        : undefined
+                                "
                                 class="coolify-input"
                         /></label></div
                 ></SettingsSection>

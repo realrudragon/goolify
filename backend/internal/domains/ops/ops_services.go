@@ -310,13 +310,41 @@ func GenerateOpenAPISpec(version string) ([]byte, error) {
 	return json.MarshalIndent(doc, "", "  ")
 }
 
+// DatabaseStartSpec holds the full runtime configuration for starting a standalone database container.
+type DatabaseStartSpec struct {
+	DBType       string
+	ResourceUUID string
+	Image        string
+	OperationID  string
+	Network      string
+	Password     string
+	IsPublic     bool
+	PublicPort   int
+}
+
 // BuildDatabaseStartCommand generates engine-specific real Docker commands for all 9 standalone database types
 // (parity with app/Actions/Database/Start{Postgresql,Mysql,Mariadb,Mongodb,Redis,Keydb,Dragonfly,Clickhouse,Sqlite}.php).
 func BuildDatabaseStartCommand(dbType, resourceUUID, image, opID string) string {
-	safeUUID := strings.ReplaceAll(resourceUUID, "'", "")
-	safeOp := strings.ReplaceAll(opID, "'", "")
+	return BuildDatabaseStartCommandFull(DatabaseStartSpec{
+		DBType:       dbType,
+		ResourceUUID: resourceUUID,
+		Image:        image,
+		OperationID:  opID,
+		Network:      "coolify",
+	})
+}
+
+func BuildDatabaseStartCommandFull(spec DatabaseStartSpec) string {
+	safeUUID := strings.ReplaceAll(spec.ResourceUUID, "'", "")
+	safeOp := strings.ReplaceAll(spec.OperationID, "'", "")
+	safeType := strings.ReplaceAll(spec.DBType, "'", "")
+	netName := strings.ReplaceAll(strings.TrimSpace(spec.Network), "'", "")
+	if netName == "" {
+		netName = "coolify"
+	}
+	image := strings.TrimSpace(spec.Image)
 	if image == "" {
-		switch dbType {
+		switch spec.DBType {
 		case "postgresql":
 			image = "postgres:16-alpine"
 		case "mysql":
@@ -339,9 +367,72 @@ func BuildDatabaseStartCommand(dbType, resourceUUID, image, opID string) string 
 			image = "postgres:16-alpine"
 		}
 	}
+	if spec.DBType == "sqlite" {
+		return fmt.Sprintf("mkdir -p '/data/coolify/databases/%s' && chmod 750 '/data/coolify/databases/%s'", safeUUID, safeUUID)
+	}
 	safeImg := strings.ReplaceAll(image, "'", "")
+	dataDir := "/data/coolify/databases/" + safeUUID
+	pw := spec.Password
+	if pw == "" {
+		pw = "coolify-default-secret"
+	}
+	qPW := "'" + strings.ReplaceAll(pw, "'", `'\''`) + "'"
+
+	var envFlags, mountTarget, extraArgs string
+	var internalPort int
+	switch spec.DBType {
+	case "postgresql":
+		internalPort = 5432
+		mountTarget = "/var/lib/postgresql/data"
+		envFlags = fmt.Sprintf("-e POSTGRES_USER=postgres -e POSTGRES_DB=postgres -e POSTGRES_PASSWORD=%s", qPW)
+	case "mysql":
+		internalPort = 3306
+		mountTarget = "/var/lib/mysql"
+		envFlags = fmt.Sprintf("-e MYSQL_ROOT_PASSWORD=%s -e MYSQL_USER=mysql -e MYSQL_PASSWORD=%s -e MYSQL_DATABASE=default", qPW, qPW)
+	case "mariadb":
+		internalPort = 3306
+		mountTarget = "/var/lib/mysql"
+		envFlags = fmt.Sprintf("-e MARIADB_ROOT_PASSWORD=%s -e MARIADB_USER=mariadb -e MARIADB_PASSWORD=%s -e MARIADB_DATABASE=default", qPW, qPW)
+	case "mongodb":
+		internalPort = 27017
+		mountTarget = "/data/db"
+		envFlags = fmt.Sprintf("-e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=%s -e MONGO_INITDB_DATABASE=default", qPW)
+	case "redis":
+		internalPort = 6379
+		mountTarget = "/data"
+		extraArgs = fmt.Sprintf(" redis-server --appendonly yes --requirepass %s", qPW)
+	case "keydb":
+		internalPort = 6379
+		mountTarget = "/data"
+		extraArgs = fmt.Sprintf(" keydb-server --appendonly yes --requirepass %s", qPW)
+	case "dragonfly":
+		internalPort = 6379
+		mountTarget = "/data"
+		extraArgs = fmt.Sprintf(" dragonfly --requirepass=%s", qPW)
+	case "clickhouse":
+		internalPort = 8123
+		mountTarget = "/var/lib/clickhouse"
+		envFlags = fmt.Sprintf("-e CLICKHOUSE_USER=default -e CLICKHOUSE_PASSWORD=%s", qPW)
+	default:
+		internalPort = 5432
+		mountTarget = "/var/lib/postgresql/data"
+		envFlags = fmt.Sprintf("-e POSTGRES_PASSWORD=%s", qPW)
+	}
+
+	portFlag := ""
+	if spec.IsPublic && spec.PublicPort > 0 && internalPort > 0 {
+		portFlag = fmt.Sprintf(" -p %d:%d", spec.PublicPort, internalPort)
+	}
+	volFlag := ""
+	if mountTarget != "" {
+		volFlag = fmt.Sprintf(" -v '%s:%s'", dataDir, mountTarget)
+	}
+	if envFlags != "" {
+		envFlags = " " + envFlags
+	}
+
 	return fmt.Sprintf(
-		"docker pull '%s' && docker rm -f 'coolify-db-%s' >/dev/null 2>&1 || true; docker run -d --restart unless-stopped --name 'coolify-db-%s' --label 'coolify.managed=true' --label 'coolify.db_type=%s' --label 'coolify.operation_id=%s' '%s'",
-		safeImg, safeUUID, safeUUID, strings.ReplaceAll(dbType, "'", ""), safeOp, safeImg,
+		"mkdir -p '%s' && (docker network inspect '%s' >/dev/null 2>&1 || docker network create --attachable '%s') && docker pull '%s' && (docker rm -f 'coolify-db-%s' >/dev/null 2>&1 || true) && docker run -d --restart unless-stopped --name 'coolify-db-%s' --network '%s'%s%s%s --label 'coolify.managed=true' --label 'coolify.db_type=%s' --label 'coolify.operation_id=%s' '%s'%s",
+		dataDir, netName, netName, safeImg, safeUUID, safeUUID, netName, portFlag, volFlag, envFlags, safeType, safeOp, safeImg, extraArgs,
 	)
 }

@@ -183,6 +183,20 @@ func finalizeExtendedJobInTx(
 			`, runnerStatus, conclusion, errMsg, execUUID)
 		}
 		return "server", "github_runner." + execState, true
+
+	case "proxy_start", "proxy_restart":
+		proxyState := "exited"
+		if status == jobs.StatusSucceeded {
+			proxyState = "running"
+		}
+		patch, _ := json.Marshal(map[string]any{"status": proxyState, "force_stop": false})
+		_, _ = tx.Exec(ctx, `UPDATE servers SET proxy = COALESCE(proxy,'{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE uuid = $2`, string(patch), spec.ServerUUID)
+		return "server", "server.proxy_status_changed", true
+
+	case "proxy_stop":
+		patch, _ := json.Marshal(map[string]any{"status": "exited", "force_stop": true})
+		_, _ = tx.Exec(ctx, `UPDATE servers SET proxy = COALESCE(proxy,'{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE uuid = $2`, string(patch), spec.ServerUUID)
+		return "server", "server.proxy_status_changed", true
 	}
 	return "", "", false
 }

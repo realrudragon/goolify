@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 go build -o /out/coolify-controlplane ./cmd/controlplane \
  && CGO_ENABLED=0 go build -o /out/coolify-cli ./cmd/coolify-cli
 
 FROM alpine:3.21 AS runtime
-RUN apk add --no-cache ca-certificates openssh-client docker-cli tzdata \
+RUN apk add --no-cache ca-certificates openssh-client docker-cli docker-cli-compose tzdata \
  && addgroup -g 1000 coolify \
  && adduser -D -u 1000 -G coolify coolify \
  && mkdir -p /data/coolify /app/web/dist \
