@@ -1,26 +1,26 @@
 {
-  "measured_at": "2026-11-20T03:14:47.797Z",
+  "measured_at": "2026-11-23T03:04:36.184Z",
   "stack": "standalone-astro-vue3.5-go-rust",
-  "image_size_mb": 47.45,
-  "controlplane_idle_rss_mb": 62.17,
-  "controlplane_active_rss_mb": 67.09,
-  "worker_rss_mb": 61.77,
+  "image_size_mb": 66.37,
+  "controlplane_idle_rss_mb": 62.62,
+  "controlplane_active_rss_mb": 67.72,
+  "worker_rss_mb": 62.22,
   "api_latency_ms": {
     "samples": 100,
-    "p50": 3.89,
-    "p95": 12.91,
-    "p99": 20.44
+    "p50": 4.71,
+    "p95": 16.58,
+    "p99": 21.56
   },
   "concurrent_deployments": {
     "queued": 10,
     "processed": 10,
-    "elapsed_sec": 4.32,
-    "throughput_per_sec": 2.31
+    "elapsed_sec": 7.39,
+    "throughput_per_sec": 1.35
   },
   "sse_log_streaming": {
     "lines_received": 100,
-    "lines_per_sec": 5481.1
+    "lines_per_sec": 7202.1
   },
-  "terminal_roundtrip_ms": 252.75,
+  "terminal_roundtrip_ms": 237.98,
   "restart_recovery_verified": true
 }

@@ -156,7 +156,7 @@ describe('Task 14: Packaging, Performance Benchmarks & Legacy Runtime Cleanlines
     assert.match(dockerfile, /coolify-executor/);
 
     const compose = fs.readFileSync(path.join(rootDir, 'docker/stack-migration/docker-compose.yml'), 'utf8');
-    assert.match(compose, /\/data\/coolify:\/data\/coolify/);
+    assert.match(compose, /(?:coolifydata|\/data\/coolify):\/data\/coolify/);
     assert.match(compose, /coolify:go:v1:/);
     assert.doesNotMatch(compose, /php|horizon|reverb|laravel/i);
 

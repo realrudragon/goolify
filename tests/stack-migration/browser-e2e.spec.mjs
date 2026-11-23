@@ -142,7 +142,7 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
   }
   async function fillLabel(label, value, scope = 'main') {
     await cdp.waitFor(`Array.from(document.querySelectorAll(${JSON.stringify(scope)} + ' label')).some(el => el.textContent.trim().startsWith(${JSON.stringify(label)}) && el.querySelector('input,textarea,select'))`);
-    await cdp.eval(`(() => { const field = Array.from(document.querySelectorAll(${JSON.stringify(scope + ' label')})).find(label => label.firstChild?.textContent?.trim() === ${JSON.stringify(label)}); if (!field) throw new Error('Missing label: ' + ${JSON.stringify(label)}); const input = field.querySelector('input, textarea, select'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); })()`);
+    await cdp.eval(`(() => { const field = Array.from(document.querySelectorAll(${JSON.stringify(scope + ' label')})).find(label => label.firstChild?.textContent?.trim() === ${JSON.stringify(label)} || label.textContent?.trim() === ${JSON.stringify(label)}); if (!field) throw new Error('Missing label: ' + ${JSON.stringify(label)}); const input = field.querySelector('input, textarea, select'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); })()`);
   }
 
   before(async () => {
@@ -679,6 +679,102 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
     await cdp.eval(`document.querySelector('[data-testid="sidebar-collapse"]').click()`);
   });
 
+  it('exercises full-function Phases 1-4 parity: live dashboard CPU/Mem usage, server metrics SVG chart, Traefik v3 proxy lifecycle, server advanced settings, application subpages, database password rotation & SecretInput, and instance email/update settings', async () => {
+    // 1. Dashboard live CPU & Memory usage percentage on localhost server row
+    await navigateWorkspace('overview');
+    await cdp.waitFor(`Array.from(document.querySelectorAll('.servers-table tbody tr')).some(tr => tr.innerText.includes('localhost') && tr.innerText.includes('CPU') && tr.innerText.includes('%') && tr.innerText.includes('Mem'))`);
+    const localhostUsageText = await cdp.eval(`Array.from(document.querySelectorAll('.servers-table tbody tr')).find(tr => tr.innerText.includes('localhost'))?.innerText || ''`);
+    assert.match(localhostUsageText, /CPU\s+\d+(\.\d+)?%/);
+    assert.match(localhostUsageText, /Mem\s+\d+(\.\d+)?%/);
+
+    // 2. Server Metrics SVG chart (/server/localhost/metrics)
+    await navigatePage('/server/localhost/metrics', 'server');
+    await cdp.waitFor(`document.querySelector('svg.metrics-svg') !== null`);
+    const polylineCount = await cdp.eval(`document.querySelectorAll('svg.metrics-svg polyline').length`);
+    assert.equal(polylineCount, 3, 'expected 3 SVG polylines (CPU, Memory, Disk) in MetricsChart');
+
+    // 3. Server Traefik v3 Proxy Config & Lifecycle (/server/localhost/proxy)
+    await navigatePage('/server/localhost/proxy', 'server');
+    await cdp.waitFor(`document.querySelector('textarea[aria-label="Proxy configuration"]')?.value.includes('coolify-proxy')`);
+    await clickText('Restart Proxy');
+    await cdp.waitFor(`document.body.innerText.includes('Proxy restart queued') || document.body.innerText.includes('running')`);
+
+    // 4. Server Advanced Settings (/server/localhost/advanced)
+    await navigatePage('/server/localhost/advanced', 'server');
+    await fillLabel('Server Timezone', 'Asia/Bangkok');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+    const savedTz = await cdp.eval(`fetch('/api/v1/servers/localhost/advanced').then(r => r.json()).then(d => d.server_timezone)`);
+    assert.equal(savedTz, 'Asia/Bangkok');
+
+    // 5. Application restored subpages: healthcheck, resource-limits, storage, servers, rollback, metrics
+    const { uuid, project, environment } = applicationDeepLink;
+    const appBase = `/project/${project}/environment/${environment}/application/${uuid}`;
+
+    await navigatePage(`${appBase}/healthcheck`, 'application');
+    await fillLabel('Path', '/healthz');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+
+    await navigatePage(`${appBase}/resource-limits`, 'application');
+    await fillLabel('Memory Limit (e.g. 512m, 2g, 0 = unlimited)', '512m');
+    await fillLabel('CPU Shares', '1024');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+
+    await navigatePage(`${appBase}/storage`, 'application');
+    await cdp.waitFor(`document.body.innerText.includes('Persistent Storage') && document.body.innerText.includes('Mount Path')`);
+    await clickText('Add');
+    await cdp.waitFor(`document.querySelector('dialog[open]') !== null`);
+    await fillLabel('Volume Name', 'app-data-vol', 'dialog[open]');
+    await fillLabel('Destination Mount Path', '/var/lib/app/data', 'dialog[open]');
+    await clickText('Add', 'dialog[open]');
+    await cdp.waitFor(`!document.querySelector('dialog[open]') && document.body.innerText.includes('/var/lib/app/data')`);
+
+    await navigatePage(`${appBase}/servers`, 'application');
+    await cdp.waitFor(`document.body.innerText.includes('Servers & Destinations') && document.body.innerText.includes('Primary')`);
+
+    await navigatePage(`${appBase}/rollback`, 'application');
+    await cdp.waitFor(`document.body.innerText.includes('Rollback') && document.body.innerText.includes('Deployment')`);
+
+    await navigatePage(`${appBase}/metrics`, 'application');
+    await cdp.waitFor(`document.querySelector('svg.metrics-svg') !== null`);
+
+    // 6. Database Configuration, SecretInput reveal, and Password Rotation
+    const dbs = await cdp.eval(`fetch('/api/v1/databases').then(r => r.json())`);
+    const livePg = dbs.find((d) => d.name === 'browser-live-pg');
+    assert.ok(livePg, 'expected browser-live-pg database to exist');
+    const dbBase = `/project/${project}/environment/${environment}/database/${livePg.uuid}`;
+    await navigatePage(dbBase, 'database');
+    await cdp.waitFor(`document.querySelector('[data-testid="database-page"]') !== null && document.body.innerText.includes('Rotate Password') && document.querySelector('input[aria-label="Internal DB URL"]') !== null`);
+    const initialHiddenType = await cdp.eval(`document.querySelector('input[aria-label="Internal DB URL"]')?.type`);
+    assert.equal(initialHiddenType, 'password');
+    await cdp.eval(`(() => {
+      const input = document.querySelector('input[aria-label="Internal DB URL"]');
+      const showBtn = Array.from(input.parentElement.querySelectorAll('button')).find(b => b.textContent.trim() === 'Show');
+      showBtn.click();
+    })()`);
+    const revealedValue = await cdp.eval(`document.querySelector('input[aria-label="Internal DB URL"]')?.value || ''`);
+    assert.match(revealedValue, /^postgres:\/\//);
+    await clickText('Rotate Password');
+    await cdp.waitFor(`document.body.innerText.includes('Database password rotated.')`);
+    const rotatedValue = await cdp.eval(`document.querySelector('input[aria-label="Internal DB URL"]')?.value || ''`);
+    assert.notEqual(rotatedValue, revealedValue, 'rotated database URL must contain a new password');
+
+    // 7. Instance Email & Auto-Update Settings (/settings/email & /settings/updates)
+    await navigatePage('/settings/email', 'settings');
+    await fillLabel('SMTP From Name', 'Coolify E2E Instance');
+    await fillLabel('SMTP From Address', 'noreply@coolify.e2e.test');
+    await fillLabel('SMTP Host', 'smtp.coolify.e2e.test');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+
+    await navigatePage('/settings/updates', 'settings');
+    await fillLabel('Update check schedule (cron)', '0 * * * *');
+    await clickText('Save');
+    await cdp.waitFor(`document.body.innerText.includes('Saved.')`);
+  });
+
   it('logs out from mobile navigation, revokes PostgreSQL session, and returns 401 on subsequent /app/auth/me', async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await cdp.eval(`document.querySelector('[data-testid="mobile-menu-toggle"]').click()`);
@@ -694,5 +790,12 @@ describe('Real Headless Chromium Browser E2E against Production Go Control Plane
 
     const meStatus = await cdp.eval(`fetch('/app/auth/me', { credentials: 'same-origin' }).then(r => r.status)`);
     assert.equal(meStatus, 401, 'expected 401 from /app/auth/me after logout');
+
+    // Verify Forgot Password mode switch on /login
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await clickText('Forgot password?');
+    await cdp.waitFor(`document.body.innerText.includes('Reset your password') && document.body.innerText.includes('Send reset link')`);
+    await clickText('Back to sign in');
+    await cdp.waitFor(`document.body.innerText.includes('Sign in to Goolify')`);
   });
 });
